@@ -31,3 +31,34 @@ test("edit_file 对不存在的旧串返回 error", async () => {
     fs.unlinkSync(f);
   }
 });
+
+test("grep_files 能递归搜索并返回 file:line:content", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lkb_grep_"));
+  const f = path.join(dir, "a.js");
+  fs.writeFileSync(f, "foo\nbar baz\nqux foo\n");
+  try {
+    const r = await executeTool("grep_files", { pattern: "foo", path: dir, include: "*.js" });
+    assert.ok(r.matches && r.matches.includes(`${f}:1:foo`), "应匹配第 1 行");
+    assert.ok(r.matches.includes(`${f}:3:qux foo`), "应匹配第 3 行");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("grep_files 无匹配时返回 note", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lkb_grep_"));
+  const f = path.join(dir, "a.js");
+  fs.writeFileSync(f, "hello\nworld\n");
+  try {
+    const r = await executeTool("grep_files", { pattern: "nomatch_xyz", path: dir });
+    assert.equal(r.matches, "");
+    assert.equal(r.note, "no matches");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("grep_files 非法正则返回 error 而非抛异常", async () => {
+  const r = await executeTool("grep_files", { pattern: "(", path: "." });
+  assert.ok(r.error, "非法正则应返回 error 对象");
+});

@@ -73,14 +73,70 @@ async function runCommand({ command, timeout = 60000 }) {
   }
 }
 
-async function grepFiles({ pattern, path: p = ".", include }) {
-  const args = [`-r`, `-n`, `-I`, `--max-count=200`, pattern, p];
-  if (include) args.push(`--include=${include}`);
+function matchInclude(name, include) {
+  if (!include) return true;
+  if (include.includes("*") || include.includes("?")) {
+    const re = new RegExp(
+      "^" +
+        include
+          .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*/g, ".*")
+          .replace(/\?/g, ".") +
+        "$"
+    );
+    return re.test(name);
+  }
+  return name === include;
+}
+
+async function* walkDir(root, include) {
+  let entries;
   try {
-    const { stdout, stderr } = await execAsync("grep", args);
-    return { matches: stdout || "", stderr: stderr || "" };
+    entries = await fsp.readdir(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (e.name === "node_modules" || e.name === ".git") continue;
+    const full = path.join(root, e.name);
+    if (e.isDirectory()) {
+      yield* walkDir(full, include);
+    } else if (e.isFile()) {
+      if (matchInclude(e.name, include)) yield full;
+    }
+  }
+}
+
+async function grepFiles({ pattern, path: p = ".", include }) {
+  try {
+    const re = new RegExp(pattern.replace(/[gy]$/, ""));
+    const out = [];
+    let total = 0;
+    const PER_FILE = 200;
+    const MAX_TOTAL = 5000;
+    for await (const f of walkDir(p, include)) {
+      let content;
+      try {
+        content = await fsp.readFile(f, "utf8");
+      } catch {
+        continue;
+      }
+      const lines = content.split("\n");
+      let fcount = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (fcount >= PER_FILE) break;
+        if (re.test(lines[i])) {
+          out.push(`${f}:${i + 1}:${lines[i]}`);
+          fcount++;
+          total++;
+          if (total >= MAX_TOTAL) break;
+        }
+      }
+      if (total >= MAX_TOTAL) break;
+    }
+    if (out.length === 0) return { matches: "", note: "no matches" };
+    return { matches: out.join("\n") };
   } catch (e) {
-    if (e.code === 1) return { matches: "", note: "no matches" };
     return { error: e.message || String(e) };
   }
 }
