@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { exec } from "node:child_process";
+import { exec, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { config } from "./config.js";
 
@@ -10,6 +10,10 @@ const execAsync = promisify(exec);
 function resolveSafe(p) {
   const base = process.cwd();
   const full = path.isAbsolute(p) ? p : path.resolve(base, p);
+  const resolvedBase = path.resolve(base);
+  if (!full.startsWith(resolvedBase + path.sep) && full !== resolvedBase) {
+    throw new Error("路径不允许访问工作目录以外的位置");
+  }
   return full;
 }
 
@@ -109,7 +113,7 @@ async function* walkDir(root, include) {
 
 async function grepFiles({ pattern, path: p = ".", include }) {
   try {
-    const re = new RegExp(pattern.replace(/[gy]$/, ""));
+    const re = new RegExp(pattern);
     const out = [];
     let total = 0;
     const PER_FILE = 200;
@@ -143,6 +147,7 @@ async function grepFiles({ pattern, path: p = ".", include }) {
 
 async function editFile({ path: p, old_string, new_string, replace_all = false }) {
   try {
+    if (old_string === "") return { error: "old_string 不能为空" };
     const full = resolveSafe(p);
     const data = await fsp.readFile(full, "utf8");
     const count = data.split(old_string).length - 1;
@@ -173,8 +178,25 @@ async function git({ operation, args = "" }) {
   if (operation === "reset" && /\s--hard\b/.test(args)) {
     return { error: "git reset --hard is blocked for safety" };
   }
-  const command = `git ${operation} ${args}`.trim();
-  return runCommand({ command, timeout: 120000 });
+  const parts = ["git", operation];
+  if (args.trim()) parts.push(...args.trim().split(/\s+/));
+  const child = spawn(parts[0], parts.slice(1), { shell: true });
+  let stdout = "", stderr = "";
+  child.stdout.on("data", (d) => (stdout += d));
+  child.stderr.on("data", (d) => (stderr += d));
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, 120000);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(`exit code ${code}`));
+      } else {
+        resolve();
+      }
+    });
+    child.on("error", reject);
+  });
+  return { stdout: stdout || "", stderr: stderr || "" };
 }
 
 function stripTags(s) {
@@ -203,13 +225,19 @@ async function webSearch({ query, max = 5 }) {
     if (!r.ok) return { error: `search HTTP ${r.status}` };
     const html = await r.text();
     const links = [...html.matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)];
-    const snippets = [...html.matchAll(/<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g)];
+    const snippets = [...html.matchAll(/<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => ({
+      i: m.index,
+      text: stripTags(m[1]),
+    }));
     const results = [];
-    for (let i = 0; i < links.length && results.length < max; i++) {
+    for (let idx = 0; idx < links.length && results.length < max; idx++) {
+      const linkEnd = links[idx].index + links[idx][0].length;
+      // 取该链接之后、下一个链接之前的第一条 snippet，避免按数组下标错位
+      const snip = snippets.find((s) => s.i > linkEnd);
       results.push({
-        title: stripTags(links[i][2]),
-        url: decodeUddg(links[i][1]),
-        snippet: snippets[i] ? stripTags(snippets[i][1]) : "",
+        title: stripTags(links[idx][2]),
+        url: decodeUddg(links[idx][1]),
+        snippet: snip ? snip.text : "",
       });
     }
     if (results.length === 0) return { results: [], note: "no results" };
@@ -221,6 +249,8 @@ async function webSearch({ query, max = 5 }) {
 
 async function webFetch({ url, limit = 8000 }) {
   try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return { error: "只支持 https:// URL" };
     const r = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; lkbclaw/0.1)" },
       redirect: "follow",

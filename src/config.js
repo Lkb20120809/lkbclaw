@@ -91,6 +91,7 @@ export function setProvider(name) {
   config.apiKey = resolveEnv(found.apiKey || "");
   config.apiBase = (found.baseUrl || "https://apihub.agnes-ai.com").replace(/\/$/, "");
   config.model = found.model || "agnes-2.5-flash";
+  config.temperature = found.temperature ?? 0.3;
   config.providerName = found.name;
 }
 

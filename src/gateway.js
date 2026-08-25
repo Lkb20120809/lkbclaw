@@ -72,7 +72,7 @@ async function handleChat(req, res) {
   };
 
   try {
-    for await (const chunk of chat(messages, { onTool, onUsage, onReasoning, model })) {
+    for await (const chunk of chat(messages, { onTool, onUsage, onReasoning, model, temperature: body.temperature ?? config.temperature })) {
       res.write(`data: ${JSON.stringify({ type: "content", content: chunk })}\n\n`);
     }
     res.write("data: [DONE]\n\n");
@@ -94,7 +94,9 @@ async function handleProxy(req, res) {
     body: JSON.stringify(body),
   });
 
-  res.writeHead(upstream.status, { "Content-Type": "application/json" });
+  res.writeHead(upstream.status, {
+    "Content-Type": body.stream ? "text/event-stream; charset=utf-8" : "application/json",
+  });
   if (body.stream) {
     for await (const chunk of upstream.body) res.write(chunk);
   } else {

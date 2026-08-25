@@ -37,8 +37,8 @@ async function* parseSSE(res) {
           }
           try {
             yield JSON.parse(data);
-          } catch {
-            /* ignore keep-alive / partial */
+          } catch (parseErr) {
+            console.error(`[parseSSE] 解析 SSE 数据失败: ${parseErr.message}, data: ${data.slice(0, 100)}`);
           }
         }
       } else if (line.startsWith("data:")) {
@@ -92,24 +92,29 @@ export function pruneMessages(messages) {
   rest = rest.map(truncate);
 
   const totalChars = () => rest.reduce((a, m) => a + (typeof m.content === "string" ? m.content.length : 0), 0);
+  let curTotal = totalChars();
   const dropOldestTurn = (arr) => {
     // 从首个 user 边界整体丢弃一轮（user 及其后的 assistant/tool），保证 tool_call/tool 配对与结构完整
     // 如果第一条已经是 user，则从第二条开始找下一个 user（即丢弃第一轮）
     let k = arr[0]?.role === "user" ? 1 : 0;
     while (k < arr.length && arr[k].role !== "user") k++;
     if (k >= arr.length) return arr; // 没有 user 消息，不再丢弃
+    const removed = arr.slice(0, k);
+    // 重新计算总字符数（避免每轮 O(n²)）
+    const subtract = (msgArr) => msgArr.reduce((a, m) => a + (typeof m.content === "string" ? m.content.length : 0), 0);
+    curTotal -= subtract(removed);
     return arr.slice(k);
   };
 
   let guard = 0;
-  while (rest.length > 2 && totalChars() > MAX_PROMPT_CHARS && guard++ < 1000) {
+  while (rest.length > 2 && curTotal > MAX_PROMPT_CHARS && guard++ < 1000) {
     rest = dropOldestTurn(rest);
   }
 
   return [...system, ...rest];
 }
 
-export async function* chat(messages, { onTool, onUsage, onReasoning, signal, model, temperature = 0.3 } = {}) {
+export async function* chat(messages, { onTool, onUsage, onReasoning, signal, model, temperature = config.temperature ?? 0.3 } = {}) {
   if (!config.apiKey) {
     throw new Error("缺少 API Key：请在 providers.json 设置 apiKey（可用 ${ENV:AGNES_API_KEY} 引用 .env）或配置 .env 的 AGNES_API_KEY");
   }
