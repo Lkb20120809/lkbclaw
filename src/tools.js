@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import { glob } from "node:fs";
 import { config } from "./config.js";
 
 const execAsync = promisify(exec);
@@ -78,7 +77,7 @@ async function grepFiles({ pattern, path: p = ".", include }) {
   const args = [`-r`, `-n`, `-I`, `--max-count=200`, pattern, p];
   if (include) args.push(`--include=${include}`);
   try {
-    const { stdout, stderr } = await execAsync(`grep ${args.map((a) => `"${a}"`).join(" ")}`);
+    const { stdout, stderr } = await execAsync("grep", args);
     return { matches: stdout || "", stderr: stderr || "" };
   } catch (e) {
     if (e.code === 1) return { matches: "", note: "no matches" };

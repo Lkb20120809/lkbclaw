@@ -94,8 +94,10 @@ export function pruneMessages(messages) {
   const totalChars = () => rest.reduce((a, m) => a + (typeof m.content === "string" ? m.content.length : 0), 0);
   const dropOldestTurn = (arr) => {
     // 从首个 user 边界整体丢弃一轮（user 及其后的 assistant/tool），保证 tool_call/tool 配对与结构完整
-    let k = 1;
+    // 如果第一条已经是 user，则从第二条开始找下一个 user（即丢弃第一轮）
+    let k = arr[0]?.role === "user" ? 1 : 0;
     while (k < arr.length && arr[k].role !== "user") k++;
+    if (k >= arr.length) return arr; // 没有 user 消息，不再丢弃
     return arr.slice(k);
   };
 
@@ -107,7 +109,7 @@ export function pruneMessages(messages) {
   return [...system, ...rest];
 }
 
-export async function* chat(messages, { onTool, onUsage, onReasoning, signal, model } = {}) {
+export async function* chat(messages, { onTool, onUsage, onReasoning, signal, model, temperature = 0.3 } = {}) {
   if (!config.apiKey) {
     throw new Error("缺少 API Key：请在 providers.json 设置 apiKey（可用 ${ENV:AGNES_API_KEY} 引用 .env）或配置 .env 的 AGNES_API_KEY");
   }
@@ -121,7 +123,7 @@ export async function* chat(messages, { onTool, onUsage, onReasoning, signal, mo
       tool_choice: "auto",
       stream: true,
       stream_options: { include_usage: true },
-      temperature: 0.3,
+      temperature,
     };
 
     const res = await fetch(url, {

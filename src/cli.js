@@ -9,7 +9,7 @@ import { highlight as hlHighlight } from "cli-highlight";
 import { ensureConfig } from "./setup.js";
 
 const messages = [{ role: "system", content: SYSTEM_PROMPT }];
-const HISTORY_FILE = path.resolve(process.cwd(), ".lkbclaw-history.json");
+const HISTORY_FILE = path.resolve(process.cwd(), ".lkb-history.json");
 
 function saveHistory(target, msgs) {
   const data = msgs.slice(1);
@@ -130,7 +130,7 @@ export async function main() {
     console.log(`\x1b[90m> ${argPrompt}\x1b[0m`);
     messages.push({ role: "user", content: argPrompt });
     try {
-      for await (const chunk of chat(messages, { onTool, onUsage, onReasoning })) {
+      for await (const chunk of chat(messages, { onTool, onUsage, onReasoning, temperature: config.temperature })) {
         printer.onText(chunk);
       }
       printer.finish();
@@ -230,7 +230,7 @@ export async function main() {
     const onReasoning = (t) => { reasoning += t; };
 
     try {
-      for await (const chunk of chat(messages, { onTool, onUsage, onReasoning })) {
+      for await (const chunk of chat(messages, { onTool, onUsage, onReasoning, temperature: config.temperature })) {
         printer.onText(chunk);
       }
       printer.finish();

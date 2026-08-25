@@ -37,7 +37,14 @@ loadEnv();
 // 解析 "${ENV:NAME}" 占位符，便于在 providers.json 里引用 .env 中的密钥
 export function resolveEnv(str) {
   if (typeof str !== "string") return str;
-  return str.replace(/\$\{(?:ENV|env):([A-Za-z0-9_]+)\}/g, (_, n) => process.env[n] || "");
+  return str.replace(/\$\{(?:ENV|env):([A-Za-z0-9_]+)\}/g, (_, n) => {
+    const val = process.env[n];
+    if (val === undefined) {
+      console.warn(`警告: 环境变量 ${n} 未设置，占位符将被替换为空字符串`);
+      return "";
+    }
+    return val;
+  });
 }
 
 // 加载 providers.json（多 API 提供商配置）
@@ -61,6 +68,7 @@ if (fs.existsSync(providersPath)) {
 const apiKey = resolveEnv((activeProvider && activeProvider.apiKey) || process.env.AGNES_API_KEY || "");
 const apiBase = (activeProvider && activeProvider.baseUrl) || process.env.AGNES_API_BASE || "https://apihub.agnes-ai.com";
 const model = (activeProvider && activeProvider.model) || process.env.AGNES_MODEL || "agnes-2.5-flash";
+const temperature = activeProvider?.temperature ?? (process.env.AGNES_TEMPERATURE ? parseFloat(process.env.AGNES_TEMPERATURE) : 0.3);
 
 export const config = {
   apiKey,
@@ -69,6 +77,7 @@ export const config = {
   providerName: (activeProvider && activeProvider.name) || process.env.LKB_PROVIDER || "agnes",
   userHome: process.env.USER_HOME || process.env.HOME || process.env.USERPROFILE || "",
   gatewayToken: process.env.GATEWAY_TOKEN || "",
+  temperature,
 };
 
 // 运行时切换 provider（重新读取工作目录的 providers.json 并刷新配置）

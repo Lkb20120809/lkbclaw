@@ -114,10 +114,11 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
     const url = new URL(req.url, `http://localhost`);
 
     const token = config.gatewayToken;
+    const authHeader = req.headers["authorization"] || "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
     const authed =
       !token ||
-      (req.headers["authorization"] &&
-        req.headers["authorization"].slice(7) === token) ||
+      bearerToken === token ||
       url.searchParams.get("token") === token;
 
     const reqOrigin = req.headers["origin"];

@@ -326,20 +326,18 @@ async function send() {
       const { done, value } = await reader.read(); if (done) break;
       buf += dec.decode(value, { stream: true });
       let idx;
-      while ((idx = buf.indexOf("\n\n")) !== -1) {
-        const ev = buf.slice(0, idx); buf = buf.slice(idx + 2);
-        for (const line of ev.split("\n")) {
-          if (!line.startsWith("data:")) continue;
-          const d = line.slice(5).trim(); if (d === "[DONE]") continue;
-          try {
-            const j = JSON.parse(d);
-            if (j.type === "content") { acc += j.content; renderMarkdown(acc, bubble); scroll(); }
-            else if (j.type === "tool") { toolBox.appendChild(createToolCard(j.name, j.args, j.result)); scroll(); }
-            else if (j.type === "reasoning") { showReasoning(reasoningEl, j.content); }
-            else if (j.type === "usage") { showUsage(j.usage); }
-            else if (j.error) { bubble.textContent = "错误: " + j.error; }
-          } catch {}
-        }
+      while ((idx = buf.indexOf("\n")) !== -1) {
+        const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
+        if (!line.startsWith("data:")) continue;
+        const d = line.slice(5).trim(); if (d === "[DONE]") continue;
+        try {
+          const j = JSON.parse(d);
+          if (j.type === "content") { acc += j.content; renderMarkdown(acc, bubble); scroll(); }
+          else if (j.type === "tool") { toolBox.appendChild(createToolCard(j.name, j.args, j.result)); scroll(); }
+          else if (j.type === "reasoning") { showReasoning(reasoningEl, j.content); }
+          else if (j.type === "usage") { showUsage(j.usage); }
+          else if (j.error) { bubble.textContent = "错误: " + j.error; }
+        } catch {}
       }
     }
     s.messages.push({ role: "assistant", content: acc });

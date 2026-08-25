@@ -52,7 +52,8 @@ export async function ensureConfig() {
 
   try {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(ENV_PATH, content, { mode: 0o600 });
+    fs.writeFileSync(ENV_PATH, content, { encoding: "utf8" });
+    try { fs.chmodSync(ENV_PATH, 0o600); } catch {}
   } catch (e) {
     console.error(`\x1b[31m保存配置失败: ${e.message}\x1b[0m`);
   }
