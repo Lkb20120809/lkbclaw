@@ -93,7 +93,7 @@ async function run() {
   help();
 }
 
-run().then(() => process.exit(0)).catch((e) => {
+run().catch((e) => {
   console.error(e && e.message ? e.message : e);
   process.exit(1);
 });

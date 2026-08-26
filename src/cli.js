@@ -35,7 +35,7 @@ let suggestSel = 0;
 let suggestActive = false;
 let suggestAt = -1;
 
-let screen, convBox, inputBox, rightBox, suggestBox;
+let screen, convBox, inputBox, rightBox, suggestBox, headerBox;
 let convLines = [];
 let convWidth = 80;
 let convHeight = 20;
@@ -47,6 +47,10 @@ function escapeBlessed(s) {
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function stripTags(s) {
+  return String(s).replace(/\{[^}]*\}/g, "");
 }
 
 function wrap(text, width, indent = "") {
@@ -95,25 +99,25 @@ function addChatCard(userText) {
 }
 
 function refreshLayout() {
-  convWidth = Math.max(20, Math.floor(screen.width * 0.72) - 2);
-  convHeight = Math.max(5, screen.height - 3);
-  rightWidth = Math.max(10, screen.width - Math.floor(screen.width * 0.72));
+  convWidth = Math.max(20, Math.floor(screen.width * 0.72) - 4);
+  convHeight = Math.max(5, screen.height - 6);
+  rightWidth = Math.max(10, Math.floor(screen.width * 0.28));
 }
 
 function buildCardLines(card) {
   const w = convWidth - 2;
   const out = [];
   if (card.type === "shell") {
-    out.push("{green-fg}! " + escapeBlessed(card.shell) + "{/}");
+    out.push("{green-fg}{bold}!{/} " + escapeBlessed(card.shell));
     for (const l of wrap(card.output || "", w, "  ")) out.push(l);
     return out;
   }
   if (card.type === "error") {
-    out.push("{red-fg}⚠ " + escapeBlessed(card.text) + "{/}");
+    out.push("{red-fg}{bold}⚠{/} " + escapeBlessed(card.text));
     return out;
   }
-  out.push("{cyan-fg}── 第 " + card.n + " 轮 ──{/}");
-  for (const l of wrap(card.user, w, "{yellow-fg}> {/}")) out.push(l);
+  out.push("{bold}{cyan-fg}第 " + card.n + " 轮{/}");
+  for (const l of wrap(card.user, w, "{cyan-fg}❯ {/}")) out.push(l);
   if (card.reasoning && card.reasoning.trim()) {
     out.push("{gray-fg}💭 " + escapeBlessed(card.reasoning.trim().slice(0, 600)) + "{/}");
   }
@@ -151,6 +155,7 @@ function renderConv() {
     const all = [];
     for (let i = blocks.length - 1; i >= 0; i--) {
       all.push(...blocks[i]);
+      all.push("{gray-fg}" + "─".repeat(Math.min(convWidth - 2, 48)) + "{/}");
       all.push("");
     }
     convLines = all;
@@ -173,37 +178,51 @@ function scheduleConvRender() {
 }
 
 function renderInput() {
-  const prefix = mode === "plan" ? "{magenta-fg}PLAN{/} " : "{green-fg}BUILD{/} ";
+  const pill = mode === "plan" ? "{black-bg}{magenta-fg} PLAN {/} " : "{black-bg}{green-fg} BUILD {/} ";
   const cur = cursor < inputBuffer.length ? inputBuffer[cursor] : " ";
   const before = inputBuffer.slice(0, cursor);
   const after = inputBuffer.slice(cursor + 1);
-  const line = prefix + escapeBlessed(before) + "{black-bg}{white-fg}" + escapeBlessed(cur) + "{/}" + escapeBlessed(after);
+  const line = pill + escapeBlessed(before) + "{black-bg}{white-fg}" + escapeBlessed(cur) + "{/}" + escapeBlessed(after);
   const hint = "{gray-fg}Enter 发送 · Shift+Tab 模式 · @ 文件 · ! 命令 · /help · Ctrl+C 退出{/}";
   inputBox.setContent(line + "\n" + hint);
 }
 
+function renderHeader() {
+  if (!headerBox) return;
+  const innerW = screen.width - 2;
+  const left = "{bold}◆ lkbclaw{/}";
+  const right = config.model + "  ·  " + (mode === "plan" ? "PLAN" : "BUILD") + "  ·  " + sessionTokens + " tok";
+  const pad = Math.max(1, innerW - (stripTags(left).length + right.length));
+  headerBox.setContent(left + " ".repeat(pad) + right);
+}
+
 function renderRight() {
-  const w = Math.max(10, rightWidth - 2);
+  const w = Math.max(10, rightWidth - 4);
+  const sep = "{gray-fg}" + "─".repeat(Math.min(w, 24)) + "{/}";
+  const modeChip = mode === "plan" ? "{magenta-fg}PLAN{/}" : "{green-fg}BUILD{/}";
   const lines = [];
-  lines.push("{bold}lkbclaw{/}");
-  lines.push("─".repeat(Math.min(w, 20)));
-  lines.push("模式: {" + (mode === "plan" ? "magenta-fg" : "green-fg") + "}" + mode.toUpperCase() + "{/}");
-  lines.push("模型: " + escapeBlessed(config.model));
-  lines.push("供应商: " + escapeBlessed(config.providerName));
-  lines.push("");
-  lines.push("TOKENS: " + sessionTokens);
-  if (lastUsage) lines.push("USED: " + lastUsage.prompt_tokens + "+" + lastUsage.completion_tokens);
-  lines.push("轮次: " + cards.filter((c) => c.type === "chat").length);
-  lines.push("");
-  lines.push("目录:");
+  lines.push("{bold}{cyan-fg}lkbclaw{/}");
+  lines.push(sep);
+  lines.push("模式   " + modeChip);
+  lines.push("模型   " + escapeBlessed(config.model));
+  lines.push("供应商 " + escapeBlessed(config.providerName));
+  lines.push(sep);
+  lines.push("TOKENS " + sessionTokens);
+  if (lastUsage) lines.push("USED   " + lastUsage.prompt_tokens + "+" + lastUsage.completion_tokens);
+  lines.push("轮次   " + cards.filter((c) => c.type === "chat").length);
+  lines.push(sep);
+  lines.push("{bold}目录{/}");
   for (const l of wrap(process.cwd(), w, " ")) lines.push(l);
-  lines.push("");
-  lines.push("TODO:");
-  if (todos.length === 0) lines.push(" (空)");
-  todos.forEach((t, i) => lines.push(" " + (t.done ? "[x]" : "[ ]") + " " + (i + 1) + ". " + escapeBlessed(t.text)));
-  lines.push("");
-  lines.push("状态: " + (busy ? "{yellow-fg}思考中…{/}" : "{green-fg}就绪{/}"));
+  lines.push(sep);
+  lines.push("{bold}TODO{/}");
+  if (todos.length === 0) lines.push("  (空)");
+  todos.forEach((t, i) =>
+    lines.push("  " + (t.done ? "{green-fg}[x]{/}" : "[ ]") + " " + (i + 1) + ". " + escapeBlessed(t.text))
+  );
+  lines.push(sep);
+  lines.push("状态   " + (busy ? "{yellow-fg}● 思考中…{/}" : "{green-fg}● 就绪{/}"));
   rightBox.setContent(lines.join("\n"));
+  renderHeader();
 }
 
 function safeResolve(p) {
@@ -546,6 +565,7 @@ async function doSend() {
   };
   const onReasoning = (t) => {
     card.reasoning += t;
+    scheduleConvRender();
   };
   const onTool = (name, args, result) => {
     card.tools.push({ name, args, result });
@@ -559,6 +579,7 @@ async function doSend() {
 
   try {
     for await (const chunk of chat(messages, {
+      model: config.model,
       onTool,
       onUsage,
       onReasoning,
@@ -732,16 +753,27 @@ export async function main() {
 
   refreshLayout();
 
+  headerBox = blessed.box({
+    parent: screen,
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: 1,
+    tags: true,
+    style: { bg: "cyan", fg: "black" },
+  });
+
   convBox = blessed.box({
     parent: screen,
     left: "0%",
-    top: "0%",
+    top: 1,
     width: "72%",
-    height: "-3",
+    height: "-4",
     tags: true,
     scrollable: false,
-    border: { type: "line" },
+    border: { type: "round" },
     label: " 对话 ",
+    padding: { left: 1, right: 1 },
     style: { border: { fg: "cyan" } },
   });
 
@@ -752,7 +784,8 @@ export async function main() {
     width: "72%",
     height: 3,
     tags: true,
-    border: { type: "line" },
+    border: { type: "round" },
+    padding: { left: 1, right: 1 },
     style: { border: { fg: "green" } },
   });
 
@@ -760,11 +793,12 @@ export async function main() {
     parent: screen,
     right: 0,
     width: "28%",
-    top: 0,
-    height: "100%",
+    top: 1,
+    height: "-1",
     tags: true,
-    border: { type: "line" },
+    border: { type: "round" },
     label: " 信息 ",
+    padding: { left: 1, right: 1 },
     style: { border: { fg: "magenta" } },
     scrollable: true,
   });
@@ -777,11 +811,11 @@ export async function main() {
     height: 8,
     tags: false,
     hidden: true,
-    border: { type: "line" },
+    border: { type: "round" },
     label: " 文件 ",
     style: {
       border: { fg: "yellow" },
-      selected: { bg: "blue", fg: "white" },
+      selected: { bg: "cyan", fg: "black" },
       item: { fg: "white" },
     },
   });
@@ -807,7 +841,8 @@ export async function main() {
   if (argPrompt && !argPrompt.startsWith("/")) {
     inputBuffer = argPrompt;
     cursor = argPrompt.length;
-    doSend();
+    await doSend();
+    process.exit(0);
   }
 }
 

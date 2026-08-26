@@ -1,5 +1,6 @@
 const MAX_MSG_CHARS = 20000;
 const MAX_PROMPT_CHARS = 600000;
+const MAX_TOOL_RESULT_CHARS = 8000;
 
 function truncateStr(s, max) {
   if (typeof s !== "string" || s.length <= max) return s;
@@ -133,11 +134,15 @@ export async function* runHarness(
           result = { error: String(e && e.message ? e.message : e) };
         }
         if (onTool) onTool(tc.function.name, args, result);
+        const toolContent = truncateStr(
+          JSON.stringify(result),
+          MAX_TOOL_RESULT_CHARS
+        );
         results.push({
           role: "tool",
           tool_call_id: tc.id,
           name: tc.function.name,
-          content: JSON.stringify(result),
+          content: toolContent,
         });
       }
       messages.push(...results);
