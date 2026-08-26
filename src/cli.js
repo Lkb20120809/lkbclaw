@@ -671,7 +671,7 @@ async function doSend() {
       onTool,
       onUsage,
       onReasoning,
-      stream: false,
+      stream: true,
       temperature: config.temperature,
       signal: abortCtrl.signal,
     })) {
