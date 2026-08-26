@@ -609,6 +609,8 @@ async function doSend() {
 
   const expanded = expandAtFiles(text);
   const turn = addTurn(text);
+  const assistantTurn = { role: "assistant", user: "", assistant: "", reasoning: "", tools: [] };
+  turns.push(assistantTurn);
   messages.push({ role: "user", content: expanded });
   busy = true;
   pinBottom = true;
@@ -618,15 +620,15 @@ async function doSend() {
   screen.render();
 
   const onText = (t) => {
-    turn.assistant += t;
+    assistantTurn.assistant += t;
     scheduleConvRender();
   };
   const onReasoning = (t) => {
-    turn.reasoning += t;
+    assistantTurn.reasoning += t;
     scheduleConvRender();
   };
   const onTool = (name, args, result) => {
-    turn.tools.push({ name, args, result });
+    assistantTurn.tools.push({ name, args, result });
     scheduleConvRender();
   };
   const onUsage = (u) => {
@@ -657,9 +659,9 @@ async function doSend() {
   } finally {
     clearTimeout(reqTimer);
   }
-  if (!turn.assistant.trim()) {
+  if (!assistantTurn.assistant.trim()) {
     const last = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
-    if (last) turn.assistant = last.content;
+    if (last) assistantTurn.assistant = last.content;
   }
   busy = false;
   stopSpin();
