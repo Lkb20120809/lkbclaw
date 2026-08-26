@@ -67,10 +67,25 @@ async function* parseSSE(res) {
   }
 }
 
+function extractContent(json) {
+  if (!json || typeof json !== "object") return null;
+  const c =
+    json?.choices?.[0]?.message?.content ??
+    json?.choices?.[0]?.text ??
+    json?.choices?.[0]?.message?.text ??
+    json?.choices?.[0]?.message?.reasoning_content ??
+    json?.output ??
+    json?.content ??
+    json?.response ??
+    null;
+  return typeof c === "string" && c.length ? c : null;
+}
+
 function createOpenAIProvider(cfg) {
   return {
     name: cfg.providerName || "openai",
     async *streamChat({ model, messages, tools, temperature, signal, stream = true }) {
+      const debug = process.env.LKB_DEBUG;
       if (!cfg.apiKey) {
         throw new Error(
           "缺少 API Key：请在 providers.json 设置 apiKey（可用 ${ENV:AGNES_API_KEY} 引用 .env）或配置 .env 的 AGNES_API_KEY"
@@ -108,13 +123,27 @@ function createOpenAIProvider(cfg) {
         throw new Error(`API error ${res.status}: ${text}`);
       }
       if (!stream) {
-        const json = await res.json();
+        const raw = await res.text();
+        if (debug) {
+          try {
+            fs.appendFileSync(".lkb-debug.log", `RESPONSE_BODY: ${raw.slice(0, 4000)}\n`);
+          } catch {}
+        }
+        let json;
+        try {
+          json = JSON.parse(raw);
+        } catch {
+          yield { choices: [{ delta: { content: "[接口返回不是合法 JSON] " + raw.slice(0, 300) } }] };
+          return;
+        }
         const msg = json.choices && json.choices[0] && json.choices[0].message;
+        const content = extractContent(json);
         const delta = {};
-        if (msg && msg.content) delta.content = msg.content;
-        if (msg && msg.reasoning_content) delta.reasoning_content = msg.reasoning_content;
+        if (content) delta.content = content;
+        if (msg && msg.reasoning_content && !content) delta.reasoning_content = msg.reasoning_content;
         if (msg && msg.tool_calls) delta.tool_calls = msg.tool_calls;
         if (Object.keys(delta).length) yield { choices: [{ delta }] };
+        else yield { choices: [{ delta: { content: "[接口返回未识别的内容格式，原始响应见 .lkb-debug.log]" } }] };
         if (json.usage) yield { usage: json.usage };
         return;
       }

@@ -107,6 +107,10 @@ export async function* runHarness(
         content += delta.content;
         if (onToken) onToken(delta.content);
         yield delta.content;
+      } else if (delta.text) {
+        content += delta.text;
+        if (onToken) onToken(delta.text);
+        yield delta.text;
       }
       if (delta.reasoning_content) {
         if (onReasoning) onReasoning(delta.reasoning_content);
