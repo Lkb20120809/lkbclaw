@@ -85,10 +85,10 @@ function wrapTagged(text, width, indent, open, close) {
       let cut = line.lastIndexOf(" ", width);
       if (cut <= 0) cut = width;
       const seg = line.slice(0, cut);
-      res.push(indent + open + seg + close);
+      res.push(indent + open + escapeBlessed(seg) + close);
       line = line.slice(cut).replace(/^\s+/, "");
     }
-    res.push(indent + open + line + close);
+    res.push(indent + open + escapeBlessed(line) + close);
   }
   return res;
 }
@@ -216,7 +216,7 @@ function renderHeader() {
   const innerW = screen.width - 2;
   const left = `${C.brand}◆ lkbclaw${C.reset} ${C.dim}v${config.version || "0.2.1"}${C.reset}`;
   const right =
-    `${config.model} · ${C.dim}${process.cwd()}${C.reset} · ⎇ ${gitBranch()}` +
+    `${escapeBlessed(config.model)} · ${C.dim}${escapeBlessed(process.cwd())}${C.reset} · ⎇ ${escapeBlessed(gitBranch())}` +
     (mode === "plan" ? ` · ${C.warn}PLAN${C.reset}` : "");
   const pad = Math.max(1, innerW - (stripTags(left).length + stripTags(right).length));
   headerBox.setContent(left + " ".repeat(pad) + right);
@@ -233,7 +233,7 @@ function renderStatus() {
   const spin = busy ? C.brand + SPIN[spinnerIdx] + C.reset : C.add + "●" + C.reset;
   const note = statusNote ? C.warn + statusNote + C.reset : (busy ? C.dim + "工作中…" + C.reset : C.dim + "就绪" + C.reset);
   statusBox.setContent(
-    `${config.model} │ ${C.brand}${bar}${C.reset} ${sessionTokens} tok │ ⎇ ${gitBranch()} │ cache ${cache}% │ ${spin} ${note}`
+    `${escapeBlessed(config.model)} │ ${C.brand}${bar}${C.reset} ${sessionTokens} tok │ ⎇ ${escapeBlessed(gitBranch())} │ cache ${cache}% │ ${spin} ${note}`
   );
 }
 
@@ -606,6 +606,7 @@ async function doSend() {
   };
   const onReasoning = (t) => {
     turn.reasoning += t;
+    scheduleConvRender();
   };
   const onTool = (name, args, result) => {
     turn.tools.push({ name, args, result });
@@ -872,7 +873,6 @@ export async function main() {
     },
   });
 
-  screen.key(["C-c"], () => {});
   screen.on("keypress", onKey);
   screen.on("resize", () => {
     refreshLayout();
