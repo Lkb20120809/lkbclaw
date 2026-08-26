@@ -200,6 +200,9 @@ function buildTurnLines(turn, w) {
   if (turn.role === "user") {
     out.push(C.user + "▍ You" + C.reset);
     out.push(...wrapTagged(turn.user, w - 2, "  ", C.user, C.reset).map((l) => l.replace(/^\s{2}/, "  ")));
+    if (turn.assistant && turn.assistant.trim()) {
+      out.push(...wrapTagged("↳ " + turn.assistant.trim(), w - 2, "  ", C.dim, C.reset));
+    }
     out.push("");
   } else {
     out.push(C.tool + "▍ Claude" + C.reset);
@@ -288,8 +291,8 @@ function positionCursor() {
     const lines = ("❯ " + before).split("\n");
     const row = lines.length - 1;
     const col = lines[row].length;
-    const absX = Math.max(1, 1 + col);
-    const absY = Math.max(1, screen.height - 2 + row);
+    const absX = colLeft + col;
+    const absY = screen.height - 3 + row;
     screen.program.cursorPos(absX, absY);
     screen.program.showCursor();
   } catch {}
@@ -684,10 +687,12 @@ async function doSend() {
   } finally {
     clearTimeout(reqTimer);
   }
-  if (!assistantTurn.assistant.trim()) {
+  let finalContent = assistantTurn.assistant.trim();
+  if (!finalContent) {
     const last = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
-    if (last) assistantTurn.assistant = last.content;
+    if (last) finalContent = last.content;
   }
+  if (finalContent) messages.push({ role: "assistant", content: finalContent });
   busy = false;
   stopSpin();
   statusNote = "";
@@ -928,6 +933,7 @@ export async function main() {
   });
 
   screen.on("keypress", onKey);
+  screen.on("render", positionCursor);
   screen.on("resize", () => {
     refreshLayout();
     renderConv();
