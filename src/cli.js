@@ -93,14 +93,20 @@ function wrapTagged(text, width, indent, open, close) {
   return res;
 }
 
+let _branch = null;
+let _branchAt = 0;
 function gitBranch() {
+  const now = Date.now();
+  if (_branch !== null && now - _branchAt < 30000) return _branch;
   try {
-    return execSync("git rev-parse --abbrev-ref HEAD 2>nul", { cwd: process.cwd() })
+    _branch = execSync("git rev-parse --abbrev-ref HEAD 2>nul", { cwd: process.cwd() })
       .toString()
       .trim() || "—";
   } catch {
-    return "—";
+    _branch = "—";
   }
+  _branchAt = now;
+  return _branch;
 }
 
 function updateSystem() {
@@ -239,18 +245,22 @@ function renderStatus() {
 
 function renderInput() {
   const prompt = C.brand + "❯ " + C.reset;
-  let disp;
-  if (cursor < inputBuffer.length) {
-    disp =
-      escapeBlessed(inputBuffer.slice(0, cursor)) +
-      "{#0b0e14-bg}{#ff5a4d-fg}" + escapeBlessed(inputBuffer[cursor]) + "{/}" +
-      escapeBlessed(inputBuffer.slice(cursor + 1));
-  } else {
-    disp = escapeBlessed(inputBuffer) + "{#0b0e14-bg}{#ff5a4d-fg} {/}";
-  }
-  const withPrompt = prompt + disp.replace(/\n/g, "\n  ");
+  const disp = escapeBlessed(inputBuffer).replace(/\n/g, "\n  ");
   const hint = C.dim + "  Enter 发送 · Shift+Enter 换行 · ! shell · / 命令 · # 记忆 · Ctrl-C 中断(双按退出)" + C.reset;
-  inputBox.setContent(withPrompt + "\n" + hint);
+  inputBox.setContent(prompt + disp + "\n" + hint);
+}
+
+function positionCursor() {
+  try {
+    const before = inputBuffer.slice(0, cursor);
+    const lines = ("❯ " + before).split("\n");
+    const row = lines.length - 1;
+    const col = lines[row].length;
+    const absX = Math.max(1, 1 + col);
+    const absY = Math.max(1, screen.height - 2 + row);
+    screen.program.cursorPos(absX, absY);
+    screen.program.showCursor();
+  } catch {}
 }
 
 function setStatusNote(n) {
