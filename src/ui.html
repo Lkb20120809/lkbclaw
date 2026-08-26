@@ -357,7 +357,21 @@ body {
 .switch .knob { position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff; transition:left .2s; }
 .switch.on .knob { left:20px; }
 
-::-webkit-scrollbar { width:10px; height:10px; }
+/* ============ Dock resizer ============ */
+.resizer {
+  position:absolute; top:0; left:-3px; width:7px; height:100%;
+  cursor:col-resize; z-index:20;
+}
+.resizer::after { content:""; position:absolute; left:3px; top:0; bottom:0; width:1px; background:transparent; transition:background .15s; }
+.resizer:hover::after, .app.resizing .resizer::after { background:var(--brand); box-shadow:0 0 8px var(--brand); }
+
+/* ============ Workflow canvas ============ */
+#wfScroll { overflow:auto; max-height:62vh; border-radius:10px; background:var(--code-bg); border:1px solid var(--border); padding:14px; }
+#wfSvg { display:block; }
+.wf-node-label { font-family:"Inter",sans-serif; font-size:12px; }
+.wf-empty { color:var(--muted); font-size:13px; padding:30px; text-align:center; }
+
+::placeholder, ::-webkit-scrollbar { width:10px; height:10px; }
 ::-webkit-scrollbar-thumb { background:rgba(127,127,127,0.28); border-radius:6px; }
 ::-webkit-scrollbar-thumb:hover { background:rgba(127,127,127,0.45); }
 </style>
@@ -394,6 +408,10 @@ body {
       <div class="nav-item" data-view="settings">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>设置</span>
+      </div>
+      <div class="nav-item" data-view="workflow">
+        <svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M9 6h6M6 9l4 7M18 9l-4 7"/></svg>
+        <span>工作流</span>
       </div>
     </nav>
     <div class="divider"></div>
@@ -535,10 +553,20 @@ body {
         </div>
       </div>
     </div>
+
+    <!-- Workflow view -->
+    <div class="view" id="view-workflow">
+      <h1>工作流画布</h1>
+      <p class="sub">当前会话的执行流：用户输入 → 模型推理 → 工具调用，圆角节点 + 贝塞尔箭头表达数据流，按节点类型着色。</p>
+      <div class="set-card" style="max-width:none">
+        <div id="wfScroll"><svg id="wfSvg" width="600" height="420"></svg></div>
+      </div>
+    </div>
   </main>
 
   <!-- ============ Right panel ============ -->
   <aside id="panel">
+    <div class="resizer" id="resizer"></div>
     <div class="panel-section">
       <div class="panel-title"><svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-14 3 7h4"/></svg>Token 用量</div>
       <div class="gauge-wrap">
@@ -577,11 +605,12 @@ const LS_KEY = "lkbclaw-sessions";
 const LS_PREF = "lkbclaw-prefs";
 
 /* ---------- preferences ---------- */
-const prefs = Object.assign({ theme:"claw", sidebar:false, panel:true, stream:true }, loadPrefs());
+const prefs = Object.assign({ theme:"claw", sidebar:false, panel:true, stream:true, panelW:340 }, loadPrefs());
 function loadPrefs(){ try { return JSON.parse(localStorage.getItem(LS_PREF))||{}; } catch { return {}; } }
 function savePrefs(){ localStorage.setItem(LS_PREF, JSON.stringify(prefs)); }
 function applyPrefs(){
   document.body.className = "theme-" + prefs.theme;
+  document.documentElement.style.setProperty("--panel-w", (prefs.panelW||340) + "px");
   app.classList.toggle("collapsed", prefs.sidebar);
   app.classList.toggle("show-panel", prefs.panel);
   sideSwitch.classList.toggle("on", prefs.sidebar);
@@ -973,6 +1002,7 @@ function switchView(name){
   if(v) v.classList.add("show");
   if(name==="dashboard"){ updateGauges(); drawLine(); }
   if(name==="skills") renderSkills();
+  if(name==="workflow") renderWorkflow();
 }
 
 const SKILLS = [
@@ -985,6 +1015,39 @@ const SKILLS = [
 ];
 function renderSkills(){
   document.getElementById("skillsList").innerHTML = SKILLS.map(([n,d])=>row(n,d)).join("");
+}
+
+/* ---------- workflow canvas ---------- */
+function escapeXml(s){ return String(s).replace(/[<>&'"]/g, c=>({ "<":"&lt;",">":"&gt;","&":"&amp;","'":"&apos;",'"':"&quot;" }[c])); }
+function renderWorkflow(){
+  const svg=document.getElementById("wfSvg"); if(!svg) return;
+  const s=current();
+  const msgs = s ? s.messages.filter(m=>["user","assistant","tool","reasoning"].includes(m.role)) : [];
+  const W=600, nodeW=452, nodeH=52, gap=64, x=(W-nodeW)/2;
+  let y=18; const parts=[];
+  for(const m of msgs){
+    let color, label;
+    if(m.role==="user"){ color="var(--brand)"; label="用户输入 · " + truncateStr(typeof m.content==="string"?m.content:"",56); }
+    else if(m.role==="assistant"){ color="var(--accent)"; label="模型推理 · " + (m.content? truncateStr(m.content,56):"(发起工具调用)"); }
+    else if(m.role==="tool"){ color="var(--amber)"; label="工具 " + (m.name||"") + " · " + truncateStr(typeof m.result==="string"?m.result:JSON.stringify(m.result||""),46); }
+    else { color="var(--muted)"; label="思考 · " + truncateStr(m.content,56); }
+    parts.push({ y, color, label }); y += nodeH + gap;
+  }
+  const H=Math.max(420, y);
+  svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  if(!parts.length){ svg.innerHTML = '<text x="'+(W/2)+'" y="40" fill="var(--muted)" font-size="13" text-anchor="middle" font-family="Inter,sans-serif">当前会话没有可展示的节点</text>'; return; }
+  let html="";
+  for(let i=0;i<parts.length;i++){
+    const yy=parts[i].y;
+    html += `<rect x="${x}" y="${yy}" width="${nodeW}" height="${nodeH}" rx="12" fill="var(--glass-strong)" stroke="${parts[i].color}" stroke-width="1.5"/>`;
+    html += `<circle cx="${x+15}" cy="${yy+nodeH/2}" r="5" fill="${parts[i].color}"/>`;
+    html += `<text class="wf-node-label" x="${x+30}" y="${yy+nodeH/2+4}" fill="var(--text)">${escapeXml(parts[i].label)}</text>`;
+    if(i<parts.length-1){
+      const y1=yy+nodeH, y2=parts[i+1].y, mx=(y1+y2)/2;
+      html += `<path d="M${x+nodeW/2} ${y1} C ${x+nodeW/2} ${mx}, ${x+nodeW/2} ${mx}, ${x+nodeW/2} ${y2}" fill="none" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="4 5"/>`;
+    }
+  }
+  svg.innerHTML=html;
 }
 
 /* ---------- channels ---------- */
@@ -1012,6 +1075,21 @@ document.getElementById("togglePanel").addEventListener("click",()=>setPref("pan
 document.getElementById("sideSwitch").addEventListener("click",()=>setPref("sidebar",!prefs.sidebar));
 document.getElementById("panelSwitch").addEventListener("click",()=>setPref("panel",!prefs.panel));
 document.getElementById("streamSwitch").addEventListener("click",()=>setPref("stream",!prefs.stream));
+
+/* ---------- dock resizer (draggable panel width) ---------- */
+(function(){
+  const resizer=document.getElementById("resizer"); if(!resizer) return;
+  let dragging=false;
+  resizer.addEventListener("mousedown",(e)=>{ dragging=true; app.classList.add("resizing"); e.preventDefault(); });
+  window.addEventListener("mousemove",(e)=>{
+    if(!dragging) return;
+    const rect=app.getBoundingClientRect();
+    let w=Math.round(rect.right - e.clientX);
+    w=Math.max(240, Math.min(620, w));
+    setPref("panelW", w);
+  });
+  window.addEventListener("mouseup",()=>{ if(dragging){ dragging=false; app.classList.remove("resizing"); } });
+})();
 document.getElementById("attachBtn").addEventListener("click",()=>addTimeline("info","附件功能为示意","未接入"));
 
 document.querySelectorAll(".nav-item").forEach(n=> n.addEventListener("click",()=>switchView(n.dataset.view)));
