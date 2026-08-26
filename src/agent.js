@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { config } from "./config.js";
 import { toolSchemas, executeTool } from "./tools.js";
 import { createHarness, pruneMessages } from "./harness.js";
@@ -17,11 +18,17 @@ export const SYSTEM_PROMPT = `你是一个在命令行中运行的开发助手�
 - 回答简洁直接，用中文。不要编造文件内容或事实，用工具核实。`;
 
 async function* parseSSE(res) {
+  const debug = process.env.LKB_DEBUG;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let dataLines = [];
   let finished = false;
+  if (debug) {
+    try {
+      fs.appendFileSync(".lkb-debug.log", `\n=== SSE START ${new Date().toISOString()} ===\n`);
+    } catch {}
+  }
   while (!finished) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -36,6 +43,7 @@ async function* parseSSE(res) {
           dataLines = [];
           if (data === "[DONE]") {
             finished = true;
+            if (debug) try { fs.appendFileSync(".lkb-debug.log", "RAW: [DONE]\n=== SSE END ===\n"); } catch {}
             break;
           }
           try {
@@ -45,9 +53,17 @@ async function* parseSSE(res) {
           }
         }
       } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trim());
+        const d = line.slice(5).trim();
+        if (debug) try { fs.appendFileSync(".lkb-debug.log", `RAW: ${d}\n`); } catch {}
+        dataLines.push(d);
       }
     }
+  }
+  if (dataLines.length) {
+    const data = dataLines.join("\n").trim();
+    try {
+      yield JSON.parse(data);
+    } catch {}
   }
 }
 
@@ -79,6 +95,14 @@ function createOpenAIProvider(cfg) {
         body: JSON.stringify(body),
         signal,
       });
+      if (process.env.LKB_DEBUG) {
+        try {
+          fs.appendFileSync(
+            ".lkb-debug.log",
+            `=== REQUEST ${new Date().toISOString()} ===\nURL: ${url}\nMODEL: ${model}\nSTATUS: ${res.status}\nHEADERS: ${JSON.stringify(Object.fromEntries(res.headers))}\n`
+          );
+        } catch {}
+      }
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`API error ${res.status}: ${text}`);
