@@ -64,6 +64,7 @@ let screen, convBox, inputBox, headerBox, statusBox, suggestBox;
 let convLines = [];
 let convWidth = 80;
 let convHeight = 20;
+let colLeft = 1;
 
 function escapeBlessed(s) {
   return String(s).replace(/[{}]/g, (c) => (c === "{" ? "{{" : "}}"));
@@ -137,8 +138,32 @@ function addTurn(userText) {
 }
 
 function refreshLayout() {
-  convWidth = Math.max(20, screen.width - 4);
-  convHeight = Math.max(5, screen.height - 5);
+  const maxW = Math.min(screen.width - 4, 110);
+  convWidth = Math.max(40, maxW);
+  colLeft = Math.max(1, Math.floor((screen.width - convWidth) / 2) - 3);
+  convHeight = Math.max(5, screen.height - 7);
+  if (headerBox) {
+    headerBox.position.left = colLeft;
+    headerBox.width = convWidth;
+  }
+  if (convBox) {
+    convBox.position.left = colLeft;
+    convBox.position.top = 2;
+    convBox.width = convWidth;
+    convBox.height = convHeight;
+  }
+  if (statusBox) {
+    statusBox.position.left = colLeft;
+    statusBox.width = convWidth;
+  }
+  if (inputBox) {
+    inputBox.position.left = colLeft;
+    inputBox.width = convWidth;
+  }
+  if (suggestBox) {
+    suggestBox.position.left = colLeft;
+    suggestBox.width = Math.min(Math.floor(convWidth * 0.85), convWidth);
+  }
 }
 
 /* ============ 工具树 + diff 渲染 ============ */
@@ -226,7 +251,7 @@ function scheduleConvRender() {
 
 function renderHeader() {
   if (!headerBox) return;
-  const innerW = screen.width - 2;
+  const innerW = convWidth;
   const left = `${C.brand}◆ lkbclaw${C.reset} ${C.dim}v${PKG_VERSION}${C.reset}`;
   const right =
     `${escapeBlessed(config.model)} · ${C.dim}${escapeBlessed(process.cwd())}${C.reset} · ⎇ ${escapeBlessed(gitBranch())}` +
@@ -851,45 +876,45 @@ export async function main() {
   headerBox = blessed.box({
     parent: screen,
     top: 0,
-    left: 0,
-    width: "100%",
+    left: colLeft,
+    width: convWidth,
     height: 1,
     tags: true,
   });
 
   convBox = blessed.box({
     parent: screen,
-    left: 0,
-    top: 1,
-    width: "100%",
-    height: "-4",
+    left: colLeft,
+    top: 2,
+    width: convWidth,
+    height: convHeight,
     tags: true,
     scrollable: false,
   });
 
   statusBox = blessed.box({
     parent: screen,
-    left: 0,
+    left: colLeft,
     bottom: 3,
-    width: "100%",
+    width: convWidth,
     height: 1,
     tags: true,
   });
 
   inputBox = blessed.box({
     parent: screen,
-    left: 0,
+    left: colLeft,
     bottom: 0,
-    width: "100%",
+    width: convWidth,
     height: 3,
     tags: true,
   });
 
   suggestBox = blessed.list({
     parent: screen,
-    left: 0,
+    left: colLeft,
     bottom: 3,
-    width: "60%",
+    width: Math.min(Math.floor(convWidth * 0.85), convWidth),
     height: 8,
     tags: false,
     hidden: true,
