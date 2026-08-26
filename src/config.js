@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { resolveSecret } from "./keystore.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const envCandidates = [
@@ -65,7 +66,7 @@ if (fs.existsSync(providersPath)) {
   }
 }
 
-const apiKey = resolveEnv((activeProvider && activeProvider.apiKey) || process.env.AGNES_API_KEY || "");
+const apiKey = resolveSecret(resolveEnv((activeProvider && activeProvider.apiKey) || process.env.AGNES_API_KEY || ""));
 const apiBase = (activeProvider && activeProvider.baseUrl) || process.env.AGNES_API_BASE || "https://apihub.agnes-ai.com";
 const model = (activeProvider && activeProvider.model) || process.env.AGNES_MODEL || "agnes-2.5-flash";
 const temperature = activeProvider?.temperature ?? (process.env.AGNES_TEMPERATURE ? parseFloat(process.env.AGNES_TEMPERATURE) : 0.3);
@@ -88,7 +89,7 @@ export function setProvider(name) {
   const list = Array.isArray(data) ? data : data.providers || [];
   const found = list.find((x) => x.name === name);
   if (!found) throw new Error("未找到 provider: " + name);
-  config.apiKey = resolveEnv(found.apiKey || "");
+  config.apiKey = resolveSecret(resolveEnv(found.apiKey || ""));
   config.apiBase = (found.baseUrl || "https://apihub.agnes-ai.com").replace(/\/$/, "");
   config.model = found.model || "agnes-2.5-flash";
   config.temperature = found.temperature ?? 0.3;

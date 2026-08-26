@@ -49,6 +49,36 @@ AGNES_MODEL=agnes-2.5-flash                  # 可选，默认模型
 
 用环境变量 `LKB_PROVIDER=openai` 切换提供商；不指定时取 `default: true` 的那项。也可以在运行后随时热切换：CLI 交互模式输入 `/provider openai`，或网关 `POST /chat` 的请求体带 `"model":"..."` 覆盖本次模型。`.env` 与 `providers.json` 都已被 git 忽略，不会随包发布。
 
+## 加密共享 API Key（让所有用户都用你的 API）
+
+如果你希望**把你的 API 分配给所有使用 lkbclaw 的人，但密钥不以明文落盘**，可以用内置的 AES-256-GCM 加密存储：
+
+```bash
+lkbclaw -keygen
+```
+
+按提示输入明文 Key 与（可选的）口令，会得到一段 `enc:...` 密文。把它写进 `.env` 或 `providers.json` 的 `apiKey` 字段即可：
+
+```ini
+# .env
+AGNES_API_KEY=enc:YWJjMTIz...
+```
+
+```jsonc
+// providers.json
+{ "providers": [ { "name": "agnes", "apiKey": "enc:YWJjMTIz...", "model": "agnes-2.5-flash", "default": true } ] }
+```
+
+运行时 lkbclaw 会自动解密（透明无感）。
+
+- **默认口令模式**：`-keygen` 口令留空时使用内置共享口令，任何拿到这份密文配置的人都能直接用你的 API——密钥在磁盘上始终是密文，不会以明文泄露。
+- **加强保护**：`-keygen` 时设置自定义口令，并把口令通过环境变量 `LKB_KEY_PASSPHRASE` 单独告知使用者；口令错误将无法解密（会告警并提示缺少 Key）。
+- 密文可与 `${ENV:NAME}` 占位符组合：把 `enc:...` 放进环境变量，再在 `providers.json` 写 `"apiKey": "${ENV:AGNES_API_KEY}"`。
+
+> 注意：`.env` / `providers.json` 默认被 git 忽略。要把加密配置共享给团队/用户，请用 `git add -f providers.json` 强制加入，或在发布包 `package.json` 的 `files` 中包含该文件。
+
+> 提醒：默认共享口令仅为「密文存储、防明文泄露」的混淆手段；若要求真正的保密，请务必使用自定义口令（通过 `LKB_KEY_PASSPHRASE` 分发）。
+
 ## 使用
 
 ```bash
