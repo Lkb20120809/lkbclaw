@@ -72,6 +72,7 @@ export async function* runHarness(
     onToken,
     signal,
     model,
+    stream,
     temperature = 0.3,
     maxRounds = 24,
   } = {}
@@ -90,6 +91,7 @@ export async function* runHarness(
       tools: toolSchemas,
       temperature,
       signal,
+      stream,
     });
 
     let content = "";
@@ -172,6 +174,7 @@ export function createHarness({
       model: opts.model || defaultModel,
       temperature: opts.temperature ?? defaultTemperature,
       signal: opts.signal,
+      stream: opts.stream,
       onTool: opts.onTool,
       onUsage: opts.onUsage,
       onReasoning: opts.onReasoning,

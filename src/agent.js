@@ -70,7 +70,7 @@ async function* parseSSE(res) {
 function createOpenAIProvider(cfg) {
   return {
     name: cfg.providerName || "openai",
-    async *streamChat({ model, messages, tools, temperature, signal }) {
+    async *streamChat({ model, messages, tools, temperature, signal, stream = true }) {
       if (!cfg.apiKey) {
         throw new Error(
           "缺少 API Key：请在 providers.json 设置 apiKey（可用 ${ENV:AGNES_API_KEY} 引用 .env）或配置 .env 的 AGNES_API_KEY"
@@ -82,7 +82,7 @@ function createOpenAIProvider(cfg) {
         messages,
         tools,
         tool_choice: "auto",
-        stream: true,
+        stream,
         stream_options: { include_usage: true },
         temperature,
       };
@@ -99,13 +99,24 @@ function createOpenAIProvider(cfg) {
         try {
           fs.appendFileSync(
             ".lkb-debug.log",
-            `=== REQUEST ${new Date().toISOString()} ===\nURL: ${url}\nMODEL: ${model}\nSTATUS: ${res.status}\nHEADERS: ${JSON.stringify(Object.fromEntries(res.headers))}\n`
+            `=== REQUEST ${new Date().toISOString()} ===\nURL: ${url}\nMODEL: ${model}\nSTREAM: ${stream}\nSTATUS: ${res.status}\nHEADERS: ${JSON.stringify(Object.fromEntries(res.headers))}\n`
           );
         } catch {}
       }
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`API error ${res.status}: ${text}`);
+      }
+      if (!stream) {
+        const json = await res.json();
+        const msg = json.choices && json.choices[0] && json.choices[0].message;
+        const delta = {};
+        if (msg && msg.content) delta.content = msg.content;
+        if (msg && msg.reasoning_content) delta.reasoning_content = msg.reasoning_content;
+        if (msg && msg.tool_calls) delta.tool_calls = msg.tool_calls;
+        if (Object.keys(delta).length) yield { choices: [{ delta }] };
+        if (json.usage) yield { usage: json.usage };
+        return;
       }
       yield* parseSSE(res);
     },
