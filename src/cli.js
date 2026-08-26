@@ -636,6 +636,8 @@ async function doSend() {
   };
 
   abortCtrl = new AbortController();
+  const timeoutMs = 120000;
+  const reqTimer = setTimeout(() => abortCtrl.abort(new Error("timeout")), timeoutMs);
   try {
     for await (const chunk of chat(messages, {
       model: config.model,
@@ -648,8 +650,11 @@ async function doSend() {
       onText(chunk);
     }
   } catch (e) {
-    if (e && e.name === "AbortError") turn.assistant += "\n\n" + C.warn + "[已中断]" + C.reset;
-    else turn.assistant += "\n\n" + C.err + "[错误] " + (e && e.message ? e.message : e) + C.reset;
+    if (e && e.name === "AbortError") {
+      turn.assistant += "\n\n" + C.warn + (e.message === "timeout" ? "[请求超时：模型接口未在 120s 内返回]" : "[已中断]") + C.reset;
+    } else turn.assistant += "\n\n" + C.err + "[错误] " + (e && e.message ? e.message : e) + C.reset;
+  } finally {
+    clearTimeout(reqTimer);
   }
   if (!turn.assistant.trim()) {
     const last = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
