@@ -16,8 +16,11 @@
     "node": ">=18"
   },
   "license": "MIT",
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "dependencies": {
+    "blessed": "^0.1.81",
     "cli-highlight": "^2.1.11"
   }
 }

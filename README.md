@@ -60,11 +60,16 @@ lkbclaw -h               # 帮助
 ```
 
 ### 终端模式（`-cli`）
-- 开场横幅 + 顶部状态行，底部状态栏显示：`⏺ N 工具 · tokens 总用量 (prompt + completion) · model`
-- 模型思考过程以 `💭 思考` 实时流式输出
-- 工具调用以 `⏺ 工具名 参数` 展示，结果折叠在后面
-- 多轮对话，输入 `exit` / `quit` 退出
-- 历史记录保存在 `~/.lkbclaw-history.json`
+启动即进入**全屏 TUI**：左侧为对话区（最新一轮在顶部，输入框固定在底部），右侧信息面板显示 模式 / 模型 / 供应商 / TOKENS / USED / 当前目录 / 待办 / 状态。
+
+- 未对话时，对话区中间偏上显示 `lkbclaw` 字符图标与提示。
+- 输入即发送：`Enter` 发送；`↑/↓` 滚动对话，`PageUp/PageDown` 翻页。
+- **模式切换**：`Shift+Tab` 在 `PLAN`（只规划、不动文件）与 `BUILD`（正常执行）之间切换，模式会注入系统提示，右侧面板实时显示。
+- **引用文件**：输入 `@` 弹出文件名补全列表（按 `↑/↓` 选择，`Tab`/`Enter` 接受），发送时自动把被引用文件内容以代码块附到消息里。
+- **执行命令**：以 `!` 开头的输入（如 `!ls -la`）会直接在当前终端执行，结果以独立卡片显示在对话中，不经过模型。
+- **联网下载资源**：浏览器/网关已能 `websearch`/`webfetch`；终端还可用 `/download <url> [dest]`（或 `!` 调用 `run_command` 里的下载命令）从网上下载所需文件到工作目录，所有模式（PLAN/BUILD）均可用。
+- 模型思考过程以 `💭` 实时显示，工具调用以 `⏺ 工具名 参数` 展示。
+- 多轮对话，输入 `/quit` 或 `Ctrl+C` 退出；历史可用 `/save`、`/load`。
 
 ### 网关 + 浏览器模式（`-gateway`）
 浏览器打开后：
@@ -82,7 +87,9 @@ lkbclaw -h               # 帮助
 - CORS 默认仅允许本机来源，公网模式仅对携带有效令牌的来源放行。
 
 ### CLI 交互命令
-`/help` · `/tools` · `/clear` · `/model [名称]`（查看或切换模型）· `/provider [名称]`（查看或热切换提供商）· `/save [路径]` · `/load [路径]` · `/history` · `/quit`
+`/help` · `/tools` · `/clear` · `/model [名称]`（查看或切换模型）· `/provider [名称]`（查看或热切换提供商）· `/mode [plan|build]`（查看或切换模式）· `/todo add|done|rm|list|clear <文本>`（管理右侧待办）· `/download <url> [dest]`（从网上下载资源）· `/save [路径]` · `/load [路径]` · `/history` · `/quit`
+
+快捷键：`Enter` 发送 · `Shift+Tab` 切模式 · `@` 文件补全 · `!` 执行命令 · `Ctrl+C` 退出。
 
 ## 内置工具
 
@@ -100,6 +107,17 @@ lkbclaw -h               # 帮助
 | `run_tests` | 跑测试（默认 `npm test`） |
 
 工具出错不会中断对话，会以错误信息返回给模型自行处理。
+
+## 架构：Agent 编排 Harness
+
+`src/agent.js` 只负责「模型接入」（OpenAI 兼容 SSE 流式解析 + 构造请求），真正的**智能体编排循环**抽到了独立的 `src/harness.js`，三者解耦：
+
+- **`Provider`**：只需实现 `streamChat({ model, messages, tools, temperature, signal })`，返回一个产出 OpenAI 风格 `delta` 事件的异步迭代器。换模型/换厂商只需换 Provider，无需动循环。
+- **`toolExecutor(name, args)`**：执行工具并返回结果（`tools.js` 的 `executeTool` 即此实现）。
+- **`runHarness(messages, { provider, toolExecutor, toolSchemas, onTool, onUsage, onReasoning, ... })`**：通用的「流式推理 → 收集工具调用 → 执行 → 回灌 → 重跑」循环，内置上下文裁剪（`pruneMessages`）与轮数上限。
+- **`createHarness({ provider, toolExecutor, toolSchemas, ... })`**：组合出一个 `chat(messages, opts)` 函数，便于做 planner/executor 等多轮编排复用。
+
+这种分层让同一个 harness 可被 CLI、网关，以及未来的评测/多智能体流程共用。
 
 ## 特性
 
