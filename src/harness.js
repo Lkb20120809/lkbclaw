@@ -69,6 +69,7 @@ export async function* runHarness(
     onTool,
     onUsage,
     onReasoning,
+    onToken,
     signal,
     model,
     temperature = 0.3,
@@ -102,6 +103,7 @@ export async function* runHarness(
       if (!delta) continue;
       if (delta.content) {
         content += delta.content;
+        if (onToken) onToken(delta.content);
         yield delta.content;
       }
       if (delta.reasoning_content) {
@@ -173,6 +175,7 @@ export function createHarness({
       onTool: opts.onTool,
       onUsage: opts.onUsage,
       onReasoning: opts.onReasoning,
+      onToken: opts.onToken,
       maxRounds: opts.maxRounds,
     });
   };
