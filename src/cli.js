@@ -3,6 +3,13 @@ import blessed from "blessed";
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+let PKG_VERSION = "0.2.1";
+try {
+  const pj = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  if (pj && pj.version) PKG_VERSION = pj.version;
+} catch {}
 import { config, setProvider } from "./config.js";
 import { chat, SYSTEM_PROMPT } from "./agent.js";
 import { tools, executeTool } from "./tools.js";
@@ -220,7 +227,7 @@ function scheduleConvRender() {
 function renderHeader() {
   if (!headerBox) return;
   const innerW = screen.width - 2;
-  const left = `${C.brand}◆ lkbclaw${C.reset} ${C.dim}v${config.version || "0.2.1"}${C.reset}`;
+  const left = `${C.brand}◆ lkbclaw${C.reset} ${C.dim}v${PKG_VERSION}${C.reset}`;
   const right =
     `${escapeBlessed(config.model)} · ${C.dim}${escapeBlessed(process.cwd())}${C.reset} · ⎇ ${escapeBlessed(gitBranch())}` +
     (mode === "plan" ? ` · ${C.warn}PLAN${C.reset}` : "");
