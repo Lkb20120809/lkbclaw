@@ -104,6 +104,26 @@ async function handleProxy(req, res) {
   }
 }
 
+const UPLOAD_DIR = ".lkb-uploads";
+async function handleUpload(req, res) {
+  try {
+    const body = await readBody(req);
+    const name = String(body.name || "")
+      .replace(/[^\w.\-\u4e00-\u9fa5]/g, "_")
+      .slice(0, 160);
+    if (!name) return sendJSON(res, 400, { error: "invalid filename" });
+    const buf = Buffer.from(String(body.content || ""), "base64");
+    if (buf.length > 10 * 1024 * 1024) return sendJSON(res, 413, { error: "file too large (max 10MB)" });
+    const dir = path.resolve(process.cwd(), UPLOAD_DIR);
+    fs.mkdirSync(dir, { recursive: true });
+    const full = path.join(dir, name);
+    fs.writeFileSync(full, buf);
+    return sendJSON(res, 200, { ok: true, path: `${UPLOAD_DIR}/${name}` });
+  } catch (e) {
+    return sendJSON(res, 500, { error: e.message });
+  }
+}
+
 export async function startGateway(port = 8787, host = "127.0.0.1") {
   await ensureConfig();
   if (!isLoopbackHost(host) && !config.gatewayToken) {
@@ -175,6 +195,9 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       }
       if (req.method === "POST" && url.pathname === "/chat") {
         return await handleChat(req, res);
+      }
+      if (req.method === "POST" && url.pathname === "/upload") {
+        return await handleUpload(req, res);
       }
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
         return await handleProxy(req, res);

@@ -460,6 +460,7 @@ body {
     <div id="statusbar"><span class="s-dot"></span><span id="statusText">就绪</span></div>
 
     <div id="inputbar">
+      <input type="file" id="fileInput" multiple style="display:none" />
       <div id="cmdPalette"></div>
       <div class="input-wrap">
         <textarea id="input" rows="1" placeholder="给 lkbclaw 发送消息…  (Enter 发送 · Shift+Enter 换行 · / 命令)"></textarea>
@@ -769,36 +770,91 @@ function showUsage(u){
 function renderMarkdown(src,container){
   container.innerHTML="";
   const lines=(src||"").split("\n");
-  let i=0, inCode=false, codeBuf=[], listBuf=null, codeLang="";
-  const flushList=()=>{ if(listBuf){ const ul=document.createElement(listBuf.ordered?"ol":"ul"); for(const it of listBuf.items){ const li=document.createElement("li"); fillInline(it,li); ul.appendChild(li);} container.appendChild(ul); listBuf=null; } };
+  let i=0, inCode=false, codeBuf=[], codeLang="";
+  let listStack=[];
+  const flushLists=()=>{ listStack=[]; };
+  const pushItem=(indent, ordered, content)=>{
+    while(listStack.length && listStack[listStack.length-1].indent > indent) listStack.pop();
+    if(!listStack.length || listStack[listStack.length-1].indent < indent){
+      const ul=document.createElement(ordered?"ol":"ul");
+      ul.style.margin=".25em 0"; ul.style.paddingLeft="1.4em";
+      if(listStack.length) listStack[listStack.length-1].el.appendChild(ul); else container.appendChild(ul);
+      listStack.push({ el:ul, indent, ordered });
+    } else if(listStack[listStack.length-1].ordered !== ordered){
+      listStack.pop();
+      const ul=document.createElement(ordered?"ol":"ul");
+      ul.style.margin=".25em 0"; ul.style.paddingLeft="1.4em"; container.appendChild(ul);
+      listStack.push({ el:ul, indent, ordered });
+    }
+    const li=document.createElement("li"); fillInline(content, li); listStack[listStack.length-1].el.appendChild(li);
+  };
+  const emitCode=()=>{
+    const pre=document.createElement("pre"); const code=document.createElement("code");
+    if(codeLang) code.className="language-"+codeLang;
+    code.textContent=codeBuf.join("\n"); pre.appendChild(code); container.appendChild(pre);
+    if(window.hljs){ try{ window.hljs.highlightElement(code); }catch(e){} }
+    inCode=false; codeBuf=[]; codeLang="";
+  };
   while(i<lines.length){
     const line=lines[i];
     if(line.trim().startsWith("```")){
-      if(!inCode){ flushList(); inCode=true; codeBuf=[]; const lm=line.trim().match(/^```(\w+)?/); codeLang=lm&&lm[1]?lm[1]:""; }
-      else { const pre=document.createElement("pre"); const code=document.createElement("code"); if(codeLang) code.className="language-"+codeLang; code.textContent=codeBuf.join("\n"); pre.appendChild(code); container.appendChild(pre); if(window.hljs){ try{window.hljs.highlightElement(code);}catch(e){} } inCode=false; codeLang=""; }
+      if(!inCode){ if(listStack.length) flushLists(); inCode=true; codeBuf=[]; const lm=line.trim().match(/^```(\w+)?/); codeLang=lm&&lm[1]?lm[1]:""; }
+      else emitCode();
       i++; continue;
     }
     if(inCode){ codeBuf.push(line); i++; continue; }
-    if(!line.trim()){ flushList(); i++; continue; }
-    const h=line.match(/^(#{1,3})\s+(.*)$/);
-    if(h){ flushList(); const tag="h"+h[1].length; const el=document.createElement(tag); fillInline(h[2],el); container.appendChild(el); i++; continue; }
-    const ul=line.match(/^\s*[-*]\s+(.*)$/); const ol=line.match(/^\s*\d+\.\s+(.*)$/);
-    if(ul||ol){ flushList(); if(!listBuf) listBuf={ordered:!!ol,items:[]}; listBuf.items.push((ul||ol)[1]); i++; continue; }
-    flushList(); const p=document.createElement("p"); fillInline(line,p); p.style.margin=".35em 0"; container.appendChild(p); i++;
+    if(!line.trim()){ if(listStack.length) flushLists(); i++; continue; }
+    if(/^(\s*[-*_]){3,}\s*$/.test(line) || /^(\s*\*\s*){3,}$/.test(line)){
+      if(listStack.length) flushLists();
+      const hr=document.createElement("hr"); hr.style.border="none"; hr.style.borderTop="1px solid var(--border-soft)"; hr.style.margin="10px 0";
+      container.appendChild(hr); i++; continue;
+    }
+    const h=line.match(/^(#{1,6})\s+(.*)$/);
+    if(h){ if(listStack.length) flushLists(); const el=document.createElement("h"+h[1].length); fillInline(h[2],el); el.style.margin=".5em 0 .35em"; el.style.lineHeight="1.3"; container.appendChild(el); i++; continue; }
+    if(/^\s*>/.test(line)){
+      if(listStack.length) flushLists();
+      const q=document.createElement("blockquote");
+      q.style.borderLeft="3px solid var(--border)"; q.style.padding="2px 12px"; q.style.margin=".4em 0"; q.style.color="var(--muted)";
+      fillInline(line.replace(/^\s*>\s?/,""), q); container.appendChild(q); i++; continue;
+    }
+    const ulm=line.match(/^(\s*)[-*+]\s+(.*)$/); const olm=line.match(/^(\s*)\d+\.\s+(.*)$/);
+    if(ulm||olm){ pushItem((ulm?ulm[1]:olm[1]).length, !ulm, (ulm?ulm[2]:olm[2])); i++; continue; }
+    if(listStack.length) flushLists();
+    const p=document.createElement("p"); fillInline(line,p); p.style.margin=".35em 0"; container.appendChild(p); i++;
   }
-  flushList();
-  if(inCode){ const pre=document.createElement("pre"); const code=document.createElement("code"); if(codeLang) code.className="language-"+codeLang; code.textContent=codeBuf.join("\n"); pre.appendChild(code); container.appendChild(pre); if(window.hljs){ try{window.hljs.highlightElement(code);}catch(e){} } }
+  if(inCode) emitCode();
+  if(listStack.length) flushLists();
 }
-function fillInline(text,el){
-  const re=/(`[^`]+`|\*\*[^*]+\*\*)/g; let last=0; let m;
+function fillInlineBasic(text,el){
+  const re=/(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|~~[^~]+~~)/g;
+  let last=0, m;
   while((m=re.exec(text))){
     if(m.index>last) el.appendChild(document.createTextNode(text.slice(last,m.index)));
     const tok=m[0];
     if(tok.startsWith("`")){ const c=document.createElement("code"); c.className="inline"; c.textContent=tok.slice(1,-1); el.appendChild(c); }
-    else { const b=document.createElement("strong"); b.textContent=tok.slice(2,-2); el.appendChild(b); }
+    else if(tok.startsWith("***")){ const b=document.createElement("strong"); const em=document.createElement("em"); em.textContent=tok.slice(3,-3); b.appendChild(em); el.appendChild(b); }
+    else if(tok.startsWith("**")){ const b=document.createElement("strong"); b.textContent=tok.slice(2,-2); el.appendChild(b); }
+    else if(tok.startsWith("~~")){ const s=document.createElement("del"); s.textContent=tok.slice(2,-2); el.appendChild(s); }
+    else { const em=document.createElement("em"); em.textContent=tok.slice(1,-1); el.appendChild(em); }
     last=m.index+tok.length;
   }
   if(last<text.length) el.appendChild(document.createTextNode(text.slice(last)));
+}
+function fillInline(text,el){
+  const linkRe=/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let last=0, m; const parts=[];
+  while((m=linkRe.exec(text))){
+    if(m.index>last) parts.push({ t:"text", v:text.slice(last,m.index) });
+    parts.push({ t:"link", text:m[1], href:m[2] });
+    last=m.index+m[0].length;
+  }
+  if(last<text.length) parts.push({ t:"text", v:text.slice(last) });
+  for(const p of parts){
+    if(p.t==="link"){
+      const a=document.createElement("a"); a.href=p.href; a.target="_blank"; a.rel="noopener noreferrer"; a.textContent=p.text;
+      a.style.color="var(--accent)"; a.style.textDecoration="underline"; el.appendChild(a);
+    } else fillInlineBasic(p.v, el);
+  }
 }
 
 /* ---------- dashboard ---------- */
@@ -1090,7 +1146,25 @@ document.getElementById("streamSwitch").addEventListener("click",()=>setPref("st
   });
   window.addEventListener("mouseup",()=>{ if(dragging){ dragging=false; app.classList.remove("resizing"); } });
 })();
-document.getElementById("attachBtn").addEventListener("click",()=>addTimeline("info","附件功能为示意","未接入"));
+document.getElementById("attachBtn").addEventListener("click",()=>{ document.getElementById("fileInput").click(); });
+document.getElementById("fileInput").addEventListener("change", async ()=>{
+  const files = Array.from(document.getElementById("fileInput").files || []);
+  if(!files.length) return;
+  for(const f of files){
+    try {
+      const b64 = await new Promise((r,j)=>{ const fr=new FileReader(); fr.onload=()=>r(String(fr.result).split(",")[1]); fr.onerror=j; fr.readAsDataURL(f); });
+      const up = await fetch("/upload"+(token?"?token="+encodeURIComponent(token):""), {
+        method:"POST", headers:{ "Content-Type":"application/json", ...(token?{Authorization:"Bearer "+token}:{}) },
+        body: JSON.stringify({ name:f.name, content:b64 }),
+      });
+      const j = await up.json();
+      if(j.ok){ inputEl.value = (inputEl.value ? inputEl.value+" " : "") + "@"+j.path+" "; autoGrow(); addTimeline("ok","已附加 "+f.name, j.path); }
+      else addTimeline("err","附件失败 "+f.name, j.error||"unknown");
+    } catch(e){ addTimeline("err","附件失败 "+f.name, e.message); }
+  }
+  document.getElementById("fileInput").value="";
+  inputEl.focus();
+});
 
 document.querySelectorAll(".nav-item").forEach(n=> n.addEventListener("click",()=>switchView(n.dataset.view)));
 
