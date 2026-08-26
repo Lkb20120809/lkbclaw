@@ -2,26 +2,39 @@
 import blessed from "blessed";
 import fs from "node:fs";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import { config, setProvider } from "./config.js";
 import { chat, SYSTEM_PROMPT } from "./agent.js";
 import { tools, executeTool } from "./tools.js";
 import { ensureConfig } from "./setup.js";
 
-const PLAN_NOTE =
-  "\n\n[PLAN MODE] 你处于计划模式。请只进行调查、阅读、搜索与规划，给出清晰的计划与理由，不要修改任何文件，也不要执行会改变状态的命令（如写文件、git commit、运行构建/测试等）。如需写文件请先征求用户同意。";
+/* ============ ANSI 文本配色（真彩色，兼容 16 色终端） ============ */
+const C = {
+  user: "{#7ee787-fg}",
+  claude: "{#d4d4d4-fg}",
+  tool: "{#56d4dd-fg}",
+  dim: "{#8b949e-fg}",
+  add: "{#3fb950-fg}",
+  del: "{#f85149-fg}",
+  warn: "{#d29922-fg}",
+  err: "{#da3633-fg}",
+  brand: "{#ff5a4d-fg}",
+  head: "{#cdd9e5-fg}",
+  reset: "{/}",
+};
+const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 const LOGO = [
-  " ██╗     ██╗  ██╗██████╗  █████╗  ██████╗██╗    ██╗",
-  " ██║     ██║ ██╔╝██╔══██╗██╔══██╗██╔════╝██║    ██║",
-  " ██║     ██║████║ ██████╔╝███████║██║     ██║ █╗ ██║",
-  " ██║     ██║╚██╝ ██╔══██╗██╔══██║██║     ██║███╗██║",
-  " ███████╗██║ ╚═╝ ██║  ██║██║  ██║╚██████╗╚███╔███╔╝",
-  " ╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══╝╚══╝",
+  "        __",
+  "   ____/ /___  ___  ___",
+  "  / __  / __ \\/ _ \\/ _ \\",
+  " / /_/ / /_/ /  __/  __/",
+  " \\__,_/\\____/\\___/\\___/   lkbclaw",
 ];
 
 const messages = [{ role: "system", content: SYSTEM_PROMPT }];
 let mode = "build";
-const cards = [];
+const turns = [];
 let sessionTokens = 0;
 let lastUsage = null;
 const todos = [];
@@ -29,31 +42,37 @@ let inputBuffer = "";
 let cursor = 0;
 let viewTop = 0;
 let busy = false;
+let pinBottom = true;
+let spinnerIdx = 0;
+let showToolDetails = false;
+let lastCtrlC = 0;
+let statusNote = "";
 
 let suggestions = [];
 let suggestSel = 0;
 let suggestActive = false;
 let suggestAt = -1;
 
-let screen, convBox, inputBox, rightBox, suggestBox, headerBox;
+let screen, convBox, inputBox, headerBox, statusBox, suggestBox;
 let convLines = [];
 let convWidth = 80;
 let convHeight = 20;
-let rightWidth = 30;
 
 function escapeBlessed(s) {
   return String(s).replace(/[{}]/g, (c) => (c === "{" ? "{{" : "}}"));
 }
-
-function clamp(n, lo, hi) {
-  return Math.max(lo, Math.min(hi, n));
-}
-
 function stripTags(s) {
   return String(s).replace(/\{[^}]*\}/g, "");
 }
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, n));
+}
+function truncateStr(s, max) {
+  if (typeof s !== "string") s = String(s);
+  return s.length > max ? s.slice(0, max) + ` …[截断 ${s.length} 字]` : s;
+}
 
-function wrap(text, width, indent = "") {
+function wrapTagged(text, width, indent, open, close) {
   const res = [];
   const lines = String(text).split("\n");
   for (const raw of lines) {
@@ -62,105 +81,120 @@ function wrap(text, width, indent = "") {
       continue;
     }
     let line = raw;
-    while (line.length > width) {
+    while (stripTags(line).length > width) {
       let cut = line.lastIndexOf(" ", width);
       if (cut <= 0) cut = width;
-      res.push(indent + line.slice(0, cut));
+      const seg = line.slice(0, cut);
+      res.push(indent + open + seg + close);
       line = line.slice(cut).replace(/^\s+/, "");
     }
-    res.push(indent + line);
+    res.push(indent + open + line + close);
   }
   return res;
+}
+
+function gitBranch() {
+  try {
+    return execSync("git rev-parse --abbrev-ref HEAD 2>nul", { cwd: process.cwd() })
+      .toString()
+      .trim() || "—";
+  } catch {
+    return "—";
+  }
 }
 
 function updateSystem() {
   messages[0].content = SYSTEM_PROMPT + (mode === "plan" ? PLAN_NOTE : "");
 }
+const PLAN_NOTE =
+  "\n\n[PLAN MODE] 只分析、规划，不改动任何文件；待用户确认后再执行。";
 
 function setMode(m) {
   mode = m;
   updateSystem();
-  renderInput();
-  renderRight();
+  renderHeader();
+  renderStatus();
   screen.render();
 }
 
-function addChatCard(userText) {
-  const card = {
-    type: "chat",
-    n: cards.filter((c) => c.type === "chat").length + 1,
-    user: userText,
-    assistant: "",
-    reasoning: "",
-    tools: [],
-  };
-  cards.push(card);
-  return card;
+function addTurn(userText) {
+  const t = { role: "user", user: userText, assistant: "", reasoning: "", tools: [] };
+  turns.push(t);
+  return t;
 }
 
 function refreshLayout() {
-  convWidth = Math.max(20, Math.floor(screen.width * 0.72) - 4);
-  convHeight = Math.max(5, screen.height - 6);
-  rightWidth = Math.max(10, Math.floor(screen.width * 0.28));
+  convWidth = Math.max(20, screen.width - 4);
+  convHeight = Math.max(5, screen.height - 5);
 }
 
-function buildCardLines(card) {
-  const w = convWidth - 2;
+/* ============ 工具树 + diff 渲染 ============ */
+function toolLines(tool, w) {
   const out = [];
-  if (card.type === "shell") {
-    out.push("{green-fg}{bold}!{/} " + escapeBlessed(card.shell));
-    for (const l of wrap(card.output || "", w, "  ")) out.push(l);
-    return out;
-  }
-  if (card.type === "error") {
-    out.push("{red-fg}{bold}⚠{/} " + escapeBlessed(card.text));
-    return out;
-  }
-  out.push("{bold}{cyan-fg}第 " + card.n + " 轮{/}");
-  for (const l of wrap(card.user, w, "{cyan-fg}❯ {/}")) out.push(l);
-  if (card.reasoning && card.reasoning.trim()) {
-    out.push("{gray-fg}💭 " + escapeBlessed(card.reasoning.trim().slice(0, 600)) + "{/}");
-  }
-  if (card.assistant && card.assistant.trim()) {
-    for (const l of wrap(card.assistant, w)) out.push(escapeBlessed(l));
-  }
-  for (const t of card.tools) {
-    out.push("{gray-fg}⏺ " + escapeBlessed(t.name) + " " + escapeBlessed(JSON.stringify(t.args)) + "{/}");
-    if (t.result && t.result.error) {
-      out.push("{gray-fg}  ✗ " + escapeBlessed(String(t.result.error)).slice(0, 200) + "{/}");
+  const st = tool.result && tool.result.error
+    ? C.err + "✗" + C.reset
+    : C.add + "✓" + C.reset;
+  out.push(`  ${C.tool}├─ 🔧 ${tool.name} ${st}${C.reset}`);
+  if (showToolDetails) {
+    out.push(...wrapTagged("args: " + JSON.stringify(tool.args || {}), w - 4, "  │ ", C.dim, C.reset));
+    if (tool.name === "edit_file" && tool.args) {
+      String(tool.args.old_string || "")
+        .split("\n")
+        .forEach((l) => out.push("  │ " + C.del + "- " + escapeBlessed(l) + C.reset));
+      String(tool.args.new_string || "")
+        .split("\n")
+        .forEach((l) => out.push("  │ " + C.add + "+ " + escapeBlessed(l) + C.reset));
+    } else if (tool.name === "write_file" && tool.args) {
+      String(tool.args.content || "")
+        .split("\n")
+        .slice(0, 60)
+        .forEach((l) => out.push("  │ " + C.add + "+ " + escapeBlessed(l) + C.reset));
+    } else {
+      const r = typeof tool.result === "string" ? tool.result : JSON.stringify(tool.result || "", null, 2);
+      out.push(...wrapTagged("result: " + truncateStr(r, 2000), w - 4, "  │ ", C.dim, C.reset));
     }
   }
   return out;
 }
 
+function buildTurnLines(turn, w) {
+  const out = [];
+  if (turn.role === "user") {
+    out.push(C.user + "▍ You" + C.reset);
+    out.push(...wrapTagged(turn.user, w - 2, "  ", C.user, C.reset).map((l) => l.replace(/^\s{2}/, "  ")));
+    out.push("");
+  } else {
+    out.push(C.tool + "▍ Claude" + C.reset);
+    if (turn.reasoning && turn.reasoning.trim()) {
+      out.push(...wrapTagged("💭 " + turn.reasoning.trim().slice(0, 1200), w - 2, "  ", C.dim, C.reset));
+    }
+    if (turn.assistant && turn.assistant.trim()) {
+      out.push(...wrapTagged(turn.assistant, w - 2, "  ", C.claude, C.reset));
+    }
+    for (const t of turn.tools) out.push(...toolLines(t, w));
+    out.push("");
+  }
+  return out;
+}
+
 function renderConv() {
-  if (cards.length === 0) {
-    const off = Math.max(0, Math.floor(convHeight * 0.28));
-    const logo = LOGO.map((l) => {
-      const pad = Math.max(0, Math.floor((convWidth - l.length) / 2));
-      return " ".repeat(pad) + l;
-    });
+  if (turns.length === 0) {
+    const off = Math.max(0, Math.floor(convHeight * 0.2));
     convLines = [
       ...Array(off).fill(""),
-      ...logo,
+      ...LOGO,
       "",
-      " ".repeat(Math.max(0, Math.floor((convWidth - 24) / 2))) +
-        "{gray-fg}输入需求开始对话 — Shift+Tab 切换 PLAN/BUILD{/}",
+      C.dim + "  终端 AI 编程代理 · 输入需求开始，或 /help 查看命令" + C.reset,
+      C.dim + "  Enter 发送 · Shift+Enter 换行 · ! shell · / 命令 · # 记忆 · Ctrl-C 中断" + C.reset,
       "",
-      " ".repeat(Math.max(0, Math.floor((convWidth - 40) / 2))) +
-        "{gray-fg}@ 引用文件   ! 执行命令   /help 帮助{/}",
     ];
   } else {
-    const blocks = cards.map(buildCardLines);
     const all = [];
-    for (let i = blocks.length - 1; i >= 0; i--) {
-      all.push(...blocks[i]);
-      all.push("{gray-fg}" + "─".repeat(Math.min(convWidth - 2, 48)) + "{/}");
-      all.push("");
-    }
+    for (const t of turns) all.push(...buildTurnLines(t, convWidth));
     convLines = all;
   }
   const maxTop = Math.max(0, convLines.length - 1);
+  if (pinBottom) viewTop = Math.max(0, convLines.length - convHeight);
   viewTop = clamp(viewTop, 0, maxTop);
   const win = convLines.slice(viewTop, viewTop + convHeight);
   convBox.setContent(win.join("\n"));
@@ -177,61 +211,61 @@ function scheduleConvRender() {
   }, 40);
 }
 
-function renderInput() {
-  const pill = mode === "plan" ? "{black-bg}{magenta-fg} PLAN {/} " : "{black-bg}{green-fg} BUILD {/} ";
-  const cur = cursor < inputBuffer.length ? inputBuffer[cursor] : " ";
-  const before = inputBuffer.slice(0, cursor);
-  const after = inputBuffer.slice(cursor + 1);
-  const line = pill + escapeBlessed(before) + "{black-bg}{white-fg}" + escapeBlessed(cur) + "{/}" + escapeBlessed(after);
-  const hint = "{gray-fg}Enter 发送 · Shift+Tab 模式 · @ 文件 · ! 命令 · /help · Ctrl+C 退出{/}";
-  inputBox.setContent(line + "\n" + hint);
-}
-
 function renderHeader() {
   if (!headerBox) return;
   const innerW = screen.width - 2;
-  const left = "{bold}◆ lkbclaw{/}";
-  const right = config.model + "  ·  " + (mode === "plan" ? "PLAN" : "BUILD") + "  ·  " + sessionTokens + " tok";
-  const pad = Math.max(1, innerW - (stripTags(left).length + right.length));
+  const left = `${C.brand}◆ lkbclaw${C.reset} ${C.dim}v${config.version || "0.2.1"}${C.reset}`;
+  const right =
+    `${config.model} · ${C.dim}${process.cwd()}${C.reset} · ⎇ ${gitBranch()}` +
+    (mode === "plan" ? ` · ${C.warn}PLAN${C.reset}` : "");
+  const pad = Math.max(1, innerW - (stripTags(left).length + stripTags(right).length));
   headerBox.setContent(left + " ".repeat(pad) + right);
 }
 
-function renderRight() {
-  const w = Math.max(10, rightWidth - 4);
-  const sep = "{gray-fg}" + "─".repeat(Math.min(w, 24)) + "{/}";
-  const modeChip = mode === "plan" ? "{magenta-fg}PLAN{/}" : "{green-fg}BUILD{/}";
-  const lines = [];
-  lines.push("{bold}{cyan-fg}lkbclaw{/}");
-  lines.push(sep);
-  lines.push("模式   " + modeChip);
-  lines.push("模型   " + escapeBlessed(config.model));
-  lines.push("供应商 " + escapeBlessed(config.providerName));
-  lines.push(sep);
-  lines.push("TOKENS " + sessionTokens);
-  if (lastUsage) lines.push("USED   " + lastUsage.prompt_tokens + "+" + lastUsage.completion_tokens);
-  lines.push("轮次   " + cards.filter((c) => c.type === "chat").length);
-  lines.push(sep);
-  lines.push("{bold}目录{/}");
-  for (const l of wrap(process.cwd(), w, " ")) lines.push(l);
-  lines.push(sep);
-  lines.push("{bold}TODO{/}");
-  if (todos.length === 0) lines.push("  (空)");
-  todos.forEach((t, i) =>
-    lines.push("  " + (t.done ? "{green-fg}[x]{/}" : "[ ]") + " " + (i + 1) + ". " + escapeBlessed(t.text))
+function renderStatus() {
+  if (!statusBox) return;
+  const cap = 200000;
+  const filled = Math.min(12, Math.round((sessionTokens / cap) * 12));
+  const bar = "▓".repeat(filled) + "░".repeat(12 - filled);
+  const cache = lastUsage && lastUsage.prompt_tokens_details && lastUsage.prompt_tokens_details.cached_tokens
+    ? Math.round((lastUsage.prompt_tokens_details.cached_tokens / Math.max(1, lastUsage.prompt_tokens)) * 100)
+    : 0;
+  const spin = busy ? C.brand + SPIN[spinnerIdx] + C.reset : C.add + "●" + C.reset;
+  const note = statusNote ? C.warn + statusNote + C.reset : (busy ? C.dim + "工作中…" + C.reset : C.dim + "就绪" + C.reset);
+  statusBox.setContent(
+    `${config.model} │ ${C.brand}${bar}${C.reset} ${sessionTokens} tok │ ⎇ ${gitBranch()} │ cache ${cache}% │ ${spin} ${note}`
   );
-  lines.push(sep);
-  lines.push("状态   " + (busy ? "{yellow-fg}● 思考中…{/}" : "{green-fg}● 就绪{/}"));
-  rightBox.setContent(lines.join("\n"));
-  renderHeader();
 }
 
+function renderInput() {
+  const prompt = C.brand + "❯ " + C.reset;
+  let disp;
+  if (cursor < inputBuffer.length) {
+    disp =
+      escapeBlessed(inputBuffer.slice(0, cursor)) +
+      "{#0b0e14-bg}{#ff5a4d-fg}" + escapeBlessed(inputBuffer[cursor]) + "{/}" +
+      escapeBlessed(inputBuffer.slice(cursor + 1));
+  } else {
+    disp = escapeBlessed(inputBuffer) + "{#0b0e14-bg}{#ff5a4d-fg} {/}";
+  }
+  const withPrompt = prompt + disp.replace(/\n/g, "\n  ");
+  const hint = C.dim + "  Enter 发送 · Shift+Enter 换行 · ! shell · / 命令 · # 记忆 · Ctrl-C 中断(双按退出)" + C.reset;
+  inputBox.setContent(withPrompt + "\n" + hint);
+}
+
+function setStatusNote(n) {
+  statusNote = n;
+  renderStatus();
+  screen.render();
+}
+
+/* ============ 文件 @ 补全 ============ */
 function safeResolve(p) {
   const base = process.cwd();
   const full = path.isAbsolute(p) ? p : path.resolve(base, p);
   if (!full.startsWith(base + path.sep) && full !== base) return null;
   return full;
 }
-
 let fileIndexCache = null;
 function getFileIndex() {
   if (fileIndexCache) return fileIndexCache;
@@ -261,7 +295,6 @@ function getFileIndex() {
   fileIndexCache = out;
   return out;
 }
-
 function computeSuggestions() {
   const before = inputBuffer.slice(0, cursor);
   const at = before.lastIndexOf("@");
@@ -281,7 +314,6 @@ function computeSuggestions() {
   suggestSel = 0;
   suggestActive = suggestions.length > 0;
 }
-
 function renderSuggest() {
   if (!suggestActive) {
     suggestBox.hide();
@@ -292,7 +324,6 @@ function renderSuggest() {
   suggestBox.select(suggestSel);
   suggestBox.show();
 }
-
 function acceptSuggestion() {
   if (!suggestActive || !suggestions[suggestSel]) return;
   const pick = suggestions[suggestSel];
@@ -305,14 +336,12 @@ function acceptSuggestion() {
   renderInput();
   screen.render();
 }
-
 function moveSuggest(d) {
   if (!suggestActive) return;
   suggestSel = clamp(suggestSel + d, 0, suggestions.length - 1);
   suggestBox.select(suggestSel);
   screen.render();
 }
-
 function expandAtFiles(text) {
   const re = /@([^\s]+)/g;
   let m;
@@ -337,6 +366,7 @@ function expandAtFiles(text) {
   return appended.length ? text + appended.join("") : text;
 }
 
+/* ============ shell / 下载 ============ */
 function formatShell(res) {
   if (!res) return "(无输出)";
   let out = "";
@@ -345,22 +375,19 @@ function formatShell(res) {
   if (res.error) out += "\n[error] " + res.error;
   return out.trim() || "(无输出)";
 }
-
 async function runShell(cmd) {
-  const card = { type: "shell", shell: cmd, output: "(执行中…)" };
-  cards.push(card);
+  const turn = addTurn("! " + cmd);
   renderConv();
   screen.render();
   try {
     const res = await executeTool("run_command", { command: cmd });
-    card.output = formatShell(res);
+    turn.assistant = formatShell(res);
   } catch (e) {
-    card.output = "[error] " + (e && e.message ? e.message : e);
+    turn.assistant = "[error] " + (e && e.message ? e.message : e);
   }
   renderConv();
   screen.render();
 }
-
 async function downloadFile(url, dest) {
   try {
     const r = await fetch(url, { redirect: "follow" });
@@ -376,37 +403,32 @@ async function downloadFile(url, dest) {
   }
 }
 
+/* ============ 命令 ============ */
 async function handleCommand(text) {
   const parts = text.slice(1).split(/\s+/);
   const cmd = parts[0].toLowerCase();
   const arg = text.slice(cmd.length + 2).trim();
-
-  if (cmd === "help") {
-    cards.push({
-      type: "error",
-      text:
-        "命令: /help /tools /clear /save [path] /load [path] /history /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /download <url> [dest] /quit",
-    });
-    viewTop = 0;
+  const info = (s) => {
+    const t = addTurn("/" + cmd);
+    t.assistant = s;
     renderConv();
     screen.render();
+  };
+  if (cmd === "help") {
+    info(
+      "命令: /help /tools /clear /save [path] /load [path] /history /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /quit"
+    );
     return;
   }
   if (cmd === "tools") {
-    cards.push({
-      type: "error",
-      text: "可用工具:\n" + tools.map((t) => "  - " + t.name + ": " + t.description).join("\n"),
-    });
-    viewTop = 0;
-    renderConv();
-    screen.render();
+    info("可用工具:\n" + tools.map((t) => "  - " + t.name + ": " + t.description).join("\n"));
     return;
   }
   if (cmd === "clear") {
-    cards.length = 0;
+    turns.length = 0;
     messages.length = 1;
     updateSystem();
-    viewTop = 0;
+    pinBottom = true;
     renderConv();
     screen.render();
     return;
@@ -414,13 +436,10 @@ async function handleCommand(text) {
   if (cmd === "model") {
     if (arg) {
       config.model = arg;
-      cards.push({ type: "error", text: "已切换模型: " + config.model });
-    } else {
-      cards.push({ type: "error", text: "Model: " + config.model + "\nBase: " + config.apiBase });
-    }
-    viewTop = 0;
-    renderConv();
-    renderRight();
+      info("已切换模型: " + config.model);
+    } else info("Model: " + config.model + "\nBase: " + config.apiBase);
+    renderHeader();
+    renderStatus();
     screen.render();
     return;
   }
@@ -428,45 +447,44 @@ async function handleCommand(text) {
     if (arg) {
       try {
         setProvider(arg);
-        cards.push({ type: "error", text: "已切换 provider: " + config.providerName + " (model: " + config.model + ")" });
+        info("已切换 provider: " + config.providerName + " (model: " + config.model + ")");
       } catch (e) {
-        cards.push({ type: "error", text: "切换失败: " + e.message });
+        info("切换失败: " + e.message);
       }
-    } else {
-      cards.push({ type: "error", text: "Provider: " + config.providerName });
-    }
-    viewTop = 0;
-    renderConv();
-    renderRight();
+    } else info("Provider: " + config.providerName);
+    renderHeader();
+    renderStatus();
     screen.render();
     return;
   }
   if (cmd === "mode") {
     if (arg === "plan" || arg === "build") setMode(arg);
-    else cards.push({ type: "error", text: "用法: /mode plan | build" });
-    viewTop = 0;
-    renderConv();
-    screen.render();
+    else info("用法: /mode plan | build");
     return;
   }
   if (cmd === "history") {
-    cards.push({ type: "error", text: "当前对话: " + cards.filter((c) => c.type === "chat").length + " 轮" });
-    viewTop = 0;
-    renderConv();
-    screen.render();
+    info("当前对话: " + turns.filter((t) => t.role === "user").length + " 轮");
+    return;
+  }
+  if (cmd === "usage") {
+    const cap = 200000;
+    const filled = Math.min(20, Math.round((sessionTokens / cap) * 20));
+    const bar = "█".repeat(filled) + "░".repeat(20 - filled);
+    info(
+      "本次会话 token 用量\n" +
+        `  ${C.brand}${bar}${C.reset} ${sessionTokens} / ${cap}\n` +
+        (lastUsage ? `  最近一轮 prompt ${lastUsage.prompt_tokens} · completion ${lastUsage.completion_tokens} · total ${lastUsage.total_tokens}` : "  （暂无用量数据）")
+    );
     return;
   }
   if (cmd === "save") {
     const p = arg || path.resolve(process.cwd(), ".lkb-history.json");
     try {
       fs.writeFileSync(p, JSON.stringify(messages.slice(1), null, 2), "utf8");
-      cards.push({ type: "error", text: "已保存 " + (messages.length - 1) + " 条消息到 " + p });
+      info("已保存 " + (messages.length - 1) + " 条消息到 " + p);
     } catch (e) {
-      cards.push({ type: "error", text: "保存失败: " + e.message });
+      info("保存失败: " + e.message);
     }
-    viewTop = 0;
-    renderConv();
-    screen.render();
     return;
   }
   if (cmd === "load") {
@@ -477,12 +495,12 @@ async function handleCommand(text) {
       messages.push({ role: "system", content: SYSTEM_PROMPT });
       updateSystem();
       for (const m of data) messages.push(m);
-      cards.length = 0;
-      cards.push({ type: "error", text: "已从 " + p + " 载入 " + data.length + " 条消息" });
+      turns.length = 0;
+      pinBottom = true;
+      info("已从 " + p + " 载入 " + data.length + " 条消息");
     } catch (e) {
-      cards.push({ type: "error", text: "载入失败: " + e.message });
+      info("载入失败: " + e.message);
     }
-    viewTop = 0;
     renderConv();
     screen.render();
     return;
@@ -501,37 +519,52 @@ async function handleCommand(text) {
     } else if (sub === "clear") {
       todos.length = 0;
     }
-    renderRight();
-    screen.render();
+    info(
+      "待办:\n" +
+        (todos.length === 0
+          ? "  (空)"
+          : todos.map((t, i) => `  ${t.done ? C.add + "[x]" + C.reset : "[ ]"} ${i + 1}. ${t.text}`).join("\n"))
+    );
     return;
   }
   if (cmd === "download") {
     const url = parts[1];
     const dest = parts.slice(2).join(" ");
     if (!url) {
-      cards.push({ type: "error", text: "用法: /download <url> [dest]" });
+      info("用法: /download <url> [dest]");
     } else {
-      const card = { type: "shell", shell: "download " + url, output: "(下载中…)" };
-      cards.push(card);
-      viewTop = 0;
+      const turn = addTurn("/download " + url);
       renderConv();
       screen.render();
-      const res = await downloadFile(url, dest);
-      card.output = res;
+      turn.assistant = await downloadFile(url, dest);
+      renderConv();
+      screen.render();
     }
-    viewTop = 0;
-    renderConv();
-    screen.render();
     return;
   }
   if (cmd === "quit" || cmd === "exit") {
     quit();
     return;
   }
-  cards.push({ type: "error", text: "未知命令: /" + cmd + " (输入 /help 查看)" });
-  viewTop = 0;
-  renderConv();
-  screen.render();
+  info("未知命令: /" + cmd + " (输入 /help 查看)");
+}
+
+/* ============ 发送 ============ */
+let abortCtrl = null;
+let spinTimer = null;
+function startSpin() {
+  if (spinTimer) return;
+  spinTimer = setInterval(() => {
+    spinnerIdx = (spinnerIdx + 1) % SPIN.length;
+    renderStatus();
+    screen.render();
+  }, 90);
+}
+function stopSpin() {
+  if (spinTimer) {
+    clearInterval(spinTimer);
+    spinTimer = null;
+  }
 }
 
 async function doSend() {
@@ -549,34 +582,42 @@ async function doSend() {
     await runShell(text.slice(1).trim());
     return;
   }
+  if (text.startsWith("#")) {
+    const turn = addTurn("# " + text.slice(1).trim());
+    turn.assistant = C.dim + "已记录为记忆指令（本会话内提示）。" + C.reset;
+    renderConv();
+    screen.render();
+    return;
+  }
 
   const expanded = expandAtFiles(text);
-  const card = addChatCard(text);
+  const turn = addTurn(text);
   messages.push({ role: "user", content: expanded });
   busy = true;
-  renderRight();
-  viewTop = 0;
+  pinBottom = true;
+  startSpin();
+  renderStatus();
   renderConv();
   screen.render();
 
   const onText = (t) => {
-    card.assistant += t;
+    turn.assistant += t;
     scheduleConvRender();
   };
   const onReasoning = (t) => {
-    card.reasoning += t;
-    scheduleConvRender();
+    turn.reasoning += t;
   };
   const onTool = (name, args, result) => {
-    card.tools.push({ name, args, result });
+    turn.tools.push({ name, args, result });
     scheduleConvRender();
   };
   const onUsage = (u) => {
     lastUsage = u;
     sessionTokens += u.total_tokens || 0;
-    renderRight();
+    renderStatus();
   };
 
+  abortCtrl = new AbortController();
   try {
     for await (const chunk of chat(messages, {
       model: config.model,
@@ -584,20 +625,25 @@ async function doSend() {
       onUsage,
       onReasoning,
       temperature: config.temperature,
+      signal: abortCtrl.signal,
     })) {
       onText(chunk);
     }
   } catch (e) {
-    card.assistant += "\n\n[错误] " + (e && e.message ? e.message : e);
+    if (e && e.name === "AbortError") turn.assistant += "\n\n" + C.warn + "[已中断]" + C.reset;
+    else turn.assistant += "\n\n" + C.err + "[错误] " + (e && e.message ? e.message : e) + C.reset;
   }
   busy = false;
-  viewTop = 0;
+  stopSpin();
+  statusNote = "";
+  pinBottom = true;
+  renderStatus();
   renderConv();
-  renderRight();
   screen.render();
 }
 
 function scrollConv(d) {
+  pinBottom = false;
   viewTop = clamp(viewTop + d, 0, Math.max(0, convLines.length - 1));
   renderConv();
   screen.render();
@@ -611,7 +657,6 @@ function insertChar(ch) {
   renderSuggest();
   screen.render();
 }
-
 function deleteChar() {
   if (cursor === 0) return;
   inputBuffer = inputBuffer.slice(0, cursor - 1) + inputBuffer.slice(cursor);
@@ -621,7 +666,6 @@ function deleteChar() {
   renderSuggest();
   screen.render();
 }
-
 function deleteForward() {
   if (cursor >= inputBuffer.length) return;
   inputBuffer = inputBuffer.slice(0, cursor) + inputBuffer.slice(cursor + 1);
@@ -630,7 +674,6 @@ function deleteForward() {
   renderSuggest();
   screen.render();
 }
-
 function quit() {
   if (screen) screen.destroy();
   process.exit(0);
@@ -646,6 +689,14 @@ function onKey(ch, key) {
 
   if (shift && k === "tab") {
     setMode(mode === "plan" ? "build" : "plan");
+    return;
+  }
+  if (k === "tab" && !suggestActive) {
+    showToolDetails = !showToolDetails;
+    setStatusNote(showToolDetails ? "工具详情: 展开" : "工具详情: 折叠");
+    setTimeout(() => setStatusNote(""), 1200);
+    renderConv();
+    screen.render();
     return;
   }
 
@@ -670,27 +721,41 @@ function onKey(ch, key) {
     }
   } else {
     if (k === "enter") {
-      if (!busy) doSend();
+      if (shift) insertChar("\n");
+      else if (!busy) doSend();
       return;
     }
     if (k === "up") {
-      scrollConv(-1);
+      scrollConv(-Math.max(1, Math.floor(convHeight / 2)));
       return;
     }
     if (k === "down") {
-      scrollConv(1);
+      scrollConv(Math.max(1, Math.floor(convHeight / 2)));
       return;
     }
     if (k === "pageup") {
-      scrollConv(-Math.max(1, convHeight - 2));
+      scrollConv(-convHeight + 2);
       return;
     }
     if (k === "pagedown") {
-      scrollConv(Math.max(1, convHeight - 2));
+      scrollConv(convHeight - 2);
       return;
     }
     if (k === "c" && key.ctrl) {
-      quit();
+      if (busy) {
+        if (abortCtrl) abortCtrl.abort();
+        setStatusNote("正在中断…");
+      } else {
+        const now = Date.now();
+        if (now - lastCtrlC < 800) quit();
+        else {
+          lastCtrlC = now;
+          setStatusNote("再按一次 Ctrl-C 退出");
+          setTimeout(() => {
+            if (Date.now() - lastCtrlC >= 800) setStatusNote("");
+          }, 900);
+        }
+      }
       return;
     }
   }
@@ -736,7 +801,7 @@ function onKey(ch, key) {
     screen.render();
     return;
   }
-  if (ch && !key.ctrl && !key.meta && k !== "tab" && k !== "enter") {
+  if (ch && !key.ctrl && !key.meta && k !== "tab") {
     insertChar(ch);
   }
 }
@@ -760,52 +825,39 @@ export async function main() {
     width: "100%",
     height: 1,
     tags: true,
-    style: { bg: "cyan", fg: "black" },
   });
 
   convBox = blessed.box({
     parent: screen,
-    left: "0%",
+    left: 0,
     top: 1,
-    width: "72%",
+    width: "100%",
     height: "-4",
     tags: true,
     scrollable: false,
-    border: { type: "round" },
-    label: " 对话 ",
-    padding: { left: 1, right: 1 },
-    style: { border: { fg: "cyan" } },
+  });
+
+  statusBox = blessed.box({
+    parent: screen,
+    left: 0,
+    bottom: 3,
+    width: "100%",
+    height: 1,
+    tags: true,
   });
 
   inputBox = blessed.box({
     parent: screen,
-    left: "0%",
+    left: 0,
     bottom: 0,
-    width: "72%",
+    width: "100%",
     height: 3,
     tags: true,
-    border: { type: "round" },
-    padding: { left: 1, right: 1 },
-    style: { border: { fg: "green" } },
-  });
-
-  rightBox = blessed.box({
-    parent: screen,
-    right: 0,
-    width: "28%",
-    top: 1,
-    height: "-1",
-    tags: true,
-    border: { type: "round" },
-    label: " 信息 ",
-    padding: { left: 1, right: 1 },
-    style: { border: { fg: "magenta" } },
-    scrollable: true,
   });
 
   suggestBox = blessed.list({
     parent: screen,
-    left: "0%",
+    left: 0,
     bottom: 3,
     width: "60%",
     height: 8,
@@ -814,25 +866,26 @@ export async function main() {
     border: { type: "round" },
     label: " 文件 ",
     style: {
-      border: { fg: "yellow" },
+      border: { fg: "cyan" },
       selected: { bg: "cyan", fg: "black" },
       item: { fg: "white" },
     },
   });
 
-  screen.key(["C-c"], () => quit());
-
+  screen.key(["C-c"], () => {});
   screen.on("keypress", onKey);
   screen.on("resize", () => {
     refreshLayout();
     renderConv();
-    renderRight();
+    renderHeader();
+    renderStatus();
     renderInput();
     screen.render();
   });
 
   renderConv();
-  renderRight();
+  renderHeader();
+  renderStatus();
   renderInput();
   screen.render();
 
