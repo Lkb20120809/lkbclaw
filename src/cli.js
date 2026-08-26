@@ -651,6 +651,10 @@ async function doSend() {
     if (e && e.name === "AbortError") turn.assistant += "\n\n" + C.warn + "[已中断]" + C.reset;
     else turn.assistant += "\n\n" + C.err + "[错误] " + (e && e.message ? e.message : e) + C.reset;
   }
+  if (!turn.assistant.trim()) {
+    const last = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
+    if (last) turn.assistant = last.content;
+  }
   busy = false;
   stopSpin();
   statusNote = "";
