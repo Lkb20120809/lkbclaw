@@ -16,6 +16,7 @@ import { tools, executeTool } from "./tools.js";
 import { pruneMessages } from "./harness.js";
 import { countTokens } from "./tokens.js";
 import { ensureConfig } from "./setup.js";
+import { loadSessions, upsertSession, findSession, newSessionId } from "./sessions.js";
 
 /* ============ ANSI 文本配色（真彩色，兼容 16 色终端） ============ */
 const C = {
@@ -43,6 +44,17 @@ const LOGO = [
 ];
 
 const messages = [{ role: "system", content: SYSTEM_PROMPT }];
+let currentSessionId = null;
+function deriveTitle() {
+  const firstUser = messages.find((m) => m.role === "user");
+  let t = firstUser
+    ? typeof firstUser.content === "string"
+      ? firstUser.content
+      : JSON.stringify(firstUser.content)
+    : "";
+  t = t.replace(/\s+/g, " ").trim();
+  return (t || "新对话").slice(0, 40);
+}
 let mode = "build";
 const turns = [];
 let sessionTokens = 0;
@@ -68,7 +80,7 @@ let layoutMode = "default";
 let toastTimer = null;
 
 const COMMANDS = [
-  "/help", "/tools", "/clear", "/compress", "/save", "/load", "/history",
+  "/help", "/tools", "/clear", "/compress", "/save", "/load", "/list", "/history",
   "/model", "/provider", "/mode plan", "/mode build",
   "/todo add", "/todo done", "/todo rm", "/todo list", "/todo clear",
   "/usage", "/download", "/quit",
@@ -557,7 +569,7 @@ async function handleCommand(text) {
   };
   if (cmd === "help") {
     info(
-      "命令: /help /tools /clear /compress [保留轮数] /save [path] /load [path] /history /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /quit"
+      "命令: /help /tools /clear /compress [保留轮数] /save [标题|路径] /load <id|路径> /list /history /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /quit"
     );
     return;
   }
@@ -568,10 +580,33 @@ async function handleCommand(text) {
   if (cmd === "clear") {
     turns.length = 0;
     messages.length = 1;
+    currentSessionId = null;
     updateSystem();
     pinBottom = true;
     renderConv();
     screen.render();
+    return;
+  }
+  if (cmd === "list" || cmd === "sessions") {
+    const list = loadSessions()
+      .slice()
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    if (!list.length) {
+      info("暂无已保存会话。用 /save 存入会话库，或打开浏览器 UI 创建。");
+      return;
+    }
+    info(
+      "已保存会话（最近优先）:\n" +
+        list
+          .map(
+            (s, i) =>
+              `  ${i + 1}. ${C.tool}[#${s.id}]${C.reset} ${s.title || "(无标题)"} — ${(
+                s.messages || []
+              ).length} 条 · ${new Date(s.updatedAt || 0).toLocaleString()}`
+          )
+          .join("\n") +
+        `\n载入: /load <id>`
+    );
     return;
   }
   if (cmd === "compress") {
@@ -632,24 +667,58 @@ async function handleCommand(text) {
     return;
   }
   if (cmd === "save") {
-    const p = arg || path.resolve(process.cwd(), ".lkb-history.json");
-    try {
-      fs.writeFileSync(p, JSON.stringify(messages.slice(1), null, 2), "utf8");
-      info("已保存 " + (messages.length - 1) + " 条消息到 " + p);
-    } catch (e) {
-      info("保存失败: " + e.message);
+    if (arg && (arg.includes(path.sep) || arg.includes("/") || arg.toLowerCase().endsWith(".json"))) {
+      const p = arg;
+      try {
+        fs.writeFileSync(p, JSON.stringify(messages.slice(1), null, 2), "utf8");
+        info("已导出 " + (messages.length - 1) + " 条消息到 " + p);
+      } catch (e) {
+        info("保存失败: " + e.message);
+      }
+      return;
     }
+    const title = arg || deriveTitle();
+    const prev = currentSessionId ? findSession(currentSessionId) : null;
+    const sess = {
+      id: currentSessionId || newSessionId(),
+      title: title.slice(0, 120),
+      messages: messages.slice(1),
+      createdAt: (prev && prev.createdAt) || Date.now(),
+      updatedAt: Date.now(),
+    };
+    upsertSession(sess);
+    currentSessionId = sess.id;
+    info("已存入会话库 " + C.tool + "[#" + sess.id + "]" + C.reset + " " + sess.title + "（" + sess.messages.length + " 条）。载入: /load " + sess.id);
     return;
   }
   if (cmd === "load") {
-    const p = arg || path.resolve(process.cwd(), ".lkb-history.json");
+    if (!arg) {
+      info("用法: /load <会话id 或 文件路径> （先用 /list 查看会话 id）");
+      return;
+    }
+    const s = findSession(arg);
+    if (s) {
+      messages.length = 0;
+      messages.push({ role: "system", content: SYSTEM_PROMPT });
+      updateSystem();
+      for (const m of s.messages || []) if (m.role !== "system") messages.push(m);
+      turns.length = 0;
+      currentSessionId = s.id;
+      pinBottom = true;
+      info("已载入会话 " + C.tool + "[#" + s.id + "]" + C.reset + " " + s.title + "（" + (s.messages || []).length + " 条）");
+      renderConv();
+      screen.render();
+      return;
+    }
+    const p = arg;
     try {
       const data = JSON.parse(fs.readFileSync(p, "utf8"));
       messages.length = 0;
       messages.push({ role: "system", content: SYSTEM_PROMPT });
       updateSystem();
-      for (const m of data) messages.push(m);
+      for (const m of data) if (m.role !== "system") messages.push(m);
       turns.length = 0;
+      currentSessionId = null;
       pinBottom = true;
       info("已从 " + p + " 载入 " + data.length + " 条消息");
     } catch (e) {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { resolveSecret } from "./keystore.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +36,58 @@ function loadEnv() {
 
 loadEnv();
 
+const ProviderSchema = z
+  .object({
+    name: z.string().min(1, "provider 名称不能为空"),
+    baseUrl: z.string().min(1, "baseUrl 不能为空").optional(),
+    apiKey: z.string().optional(),
+    model: z.string().min(1).optional(),
+    temperature: z.number().min(0).max(2, "temperature 必须在 0~2 之间").optional(),
+    default: z.boolean().optional(),
+  })
+  .passthrough();
+
+const ConfigSchema = z.object({
+  apiKey: z.string(),
+  apiBase: z.string().min(1, "apiBase 不能为空"),
+  model: z.string().min(1, "model 不能为空"),
+  providerName: z.string().min(1),
+  userHome: z.string(),
+  gatewayToken: z.string(),
+  temperature: z.number().min(0).max(2, "temperature 必须在 0~2 之间"),
+  contextBudgetChars: z.number().int().nonnegative(),
+  contextBudgetTokens: z.number().int().nonnegative(),
+  keepRecentPairs: z.number().int().nonnegative(),
+  memoryModel: z.string(),
+});
+
+function formatIssues(issues) {
+  return issues
+    .map((i) => `  - ${i.path.join(".") || "(根)"}: ${i.message}`)
+    .join("\n");
+}
+
+export function validateProviders(list) {
+  if (!Array.isArray(list)) return;
+  for (let i = 0; i < list.length; i++) {
+    const r = ProviderSchema.safeParse(list[i]);
+    if (!r.success) {
+      throw new Error(
+        `providers.json 第 ${i + 1} 项校验失败:\n${formatIssues(r.error.issues)}`
+      );
+    }
+  }
+}
+
+export function validateConfig(cfg) {
+  const r = ConfigSchema.safeParse(cfg);
+  if (!r.success) {
+    throw new Error(`配置校验失败:\n${formatIssues(r.error.issues)}`);
+  }
+  return true;
+}
+
+
 // 解析 "${ENV:NAME}" 占位符，便于在 providers.json 里引用 .env 中的密钥
 export function resolveEnv(str) {
   if (typeof str !== "string") return str;
@@ -55,6 +108,7 @@ if (fs.existsSync(providersPath)) {
   try {
     const data = JSON.parse(fs.readFileSync(providersPath, "utf8"));
     const list = Array.isArray(data) ? data : data.providers || [];
+    validateProviders(list);
     const wanted = process.env.LKB_PROVIDER || "";
     activeProvider =
       list.find((p) => p.name === wanted) ||
@@ -62,7 +116,7 @@ if (fs.existsSync(providersPath)) {
       list[0] ||
       null;
   } catch (e) {
-    console.error("providers.json 解析失败: " + e.message);
+    console.error("providers.json 校验/解析失败: " + e.message);
   }
 }
 
@@ -113,3 +167,6 @@ export function setProvider(name) {
 if (!config.apiKey) {
   console.warn("警告: 未配置 API Key（providers.json 或 .env），对话与网关将无法调用模型。");
 }
+
+validateConfig(config);
+

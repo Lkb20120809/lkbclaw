@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { chat, SYSTEM_PROMPT, summarizeConversation } from "./agent.js";
 import { ensureConfig } from "./setup.js";
+import { loadSessions, saveSessions, findSession, newSessionId, upsertSession } from "./sessions.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_HTML = fs.readFileSync(path.join(__dirname, "ui.html"), "utf8");
@@ -16,30 +17,6 @@ try {
   if (pj && pj.version) PKG_VERSION = pj.version;
 } catch {}
 
-const SESSIONS_FILE = path.resolve(__dirname, "..", ".lkb-sessions.json");
-let sessionsCache = null;
-function loadSessions() {
-  if (sessionsCache) return sessionsCache;
-  try {
-    const raw = fs.readFileSync(SESSIONS_FILE, "utf8");
-    const data = JSON.parse(raw);
-    sessionsCache = Array.isArray(data) ? data : [];
-  } catch {
-    sessionsCache = [];
-  }
-  return sessionsCache;
-}
-function saveSessions() {
-  try {
-    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessionsCache, null, 2));
-  } catch {}
-}
-function findSession(id) {
-  return loadSessions().find((s) => s.id === id);
-}
-function newSessionId() {
-  return crypto.randomBytes(9).toString("base64url");
-}
 function readBodySafe(req) {
   return readBody(req).catch(() => ({}));
 }
@@ -74,6 +51,23 @@ function sendJSON(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
   res.end(body);
+}
+
+// 把常见底层错误转成用户能看懂的提示（原始信息仍会打到网关日志，便于排查）
+function friendlyError(e) {
+  const msg = (e && e.message ? e.message : String(e)) || "";
+  if (/ECONNREFUSED|ENOTFOUND|fetch failed|network|getaddrinfo/i.test(msg))
+    return "无法连接模型服务，请检查网络以及 apiBase 是否正确";
+  if (/401|unauthorized|invalid api key|invalid_api_key|auth/i.test(msg))
+    return "API Key 无效或无权限，请检查 providers.json / .env 中的密钥";
+  if (/403/i.test(msg)) return "当前密钥无权限访问该模型";
+  if (/timeout|timed out|aborted/i.test(msg))
+    return "请求超时，请稍后重试或调小上下文预算";
+  if (/not support|unsupported|tool_calls|does not support/i.test(msg))
+    return "当前模型可能不支持工具调用，请换用支持工具的模型";
+  if (/400|bad request/i.test(msg)) return "请求被拒（400）：" + msg;
+  if (/429|rate limit/i.test(msg)) return "触发限流（429），请稍后重试";
+  return msg || "未知错误";
 }
 
 async function handleChat(req, res) {
@@ -126,7 +120,7 @@ async function handleChat(req, res) {
     res.write("data: [DONE]\n\n");
   } catch (e) {
     console.error(`\x1b[31m[chat] 出错: ${e.stack || e.message}\x1b[0m`);
-    res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: friendlyError(e) })}\n\n`);
     res.write("data: [DONE]\n\n");
   }
   res.end();
@@ -178,6 +172,8 @@ async function handleUpload(req, res) {
 
 export async function startGateway(port = 8787, host = "127.0.0.1") {
   await ensureConfig();
+  let serverClosing = false;
+  let activeRequests = 0;
   if (!isLoopbackHost(host) && !config.gatewayToken) {
     config.gatewayToken = crypto.randomBytes(18).toString("base64url");
     console.log(
@@ -186,8 +182,14 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
   }
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost`);
+    if (serverClosing) {
+      res.writeHead(503, { "Content-Type": "application/json; charset=utf-8" });
+      return res.end(JSON.stringify({ error: "server is shutting down" }));
+    }
+    activeRequests++;
     const reqStart = Date.now();
     res.on("finish", () => {
+      activeRequests = Math.max(0, activeRequests - 1);
       const ms = Date.now() - reqStart;
       const status = res.statusCode;
       const color = status >= 500 ? "\x1b[31m" : status >= 400 ? "\x1b[33m" : "\x1b[36m";
@@ -276,8 +278,7 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
             createdAt: Date.now(),
             updatedAt: Date.now(),
           };
-          loadSessions().push(sess);
-          saveSessions();
+          upsertSession(sess);
           return sendJSON(res, 200, { session: sess });
         }
         const m = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
@@ -295,7 +296,7 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
             if (typeof body.title === "string") s.title = body.title.slice(0, 120);
             if (Array.isArray(body.messages)) s.messages = body.messages;
             s.updatedAt = Date.now();
-            saveSessions();
+            upsertSession(s);
             return sendJSON(res, 200, { session: s });
           }
           if (req.method === "DELETE") {
@@ -323,7 +324,7 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       console.error(
         `\x1b[31m请求处理出错 ${req.method} ${url.pathname}: ${e.stack || e.message}\x1b[0m`
       );
-      if (!res.headersSent) sendJSON(res, 500, { error: e.message });
+      if (!res.headersSent) sendJSON(res, 500, { error: friendlyError(e) });
       else res.end();
     }
   });
@@ -339,6 +340,25 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       console.error(`网关启动失败: ${e.message}`);
       process.exit(1);
     });
+
+  const shutdown = (sig) => {
+    if (serverClosing) return;
+    serverClosing = true;
+    console.log(
+      `\n\x1b[33m收到 ${sig}，正在关闭网关（等待 ${activeRequests} 个在途请求完成）...\x1b[0m`
+    );
+    server.close(() => {
+      console.log("\x1b[32m网关已优雅关闭。\x1b[0m");
+      process.exit(0);
+    });
+    setTimeout(() => {
+      console.log("\x1b[31m等待超时，强制退出。\x1b[0m");
+      process.exit(1);
+    }, 10000).unref();
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
   return server;
 }
 
