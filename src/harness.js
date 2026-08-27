@@ -1,42 +1,98 @@
-const MAX_MSG_CHARS = 20000;
+import { config } from "./config.js";
+import { countMessageTokens, truncateTokens } from "./tokens.js";
+
+const MAX_MSG_TOKENS = 5000;
 const MAX_PROMPT_CHARS = 600000;
-const MAX_TOOL_RESULT_CHARS = 8000;
+const MAX_TOOL_RESULT_TOKENS = 2000;
 
-function truncateStr(s, max) {
-  if (typeof s !== "string" || s.length <= max) return s;
-  return s.slice(0, max) + `\n... [truncated, original ${s.length} chars]`;
-}
-
-export function pruneMessages(messages) {
+export async function pruneMessages(messages, opts = {}) {
+  const budget = opts.budgetTokens ?? (config.contextBudgetTokens || 60000);
+  const keepRecent = opts.keepRecent ?? (config.keepRecentPairs || 6);
+  const summarize = opts.summarize || null;
   const system = messages[0] && messages[0].role === "system" ? [messages[0]] : [];
   let rest = system.length ? messages.slice(1) : messages.slice();
 
+  const tok = (m) => countMessageTokens(m);
+
   const truncate = (m) => ({
     ...m,
-    content: typeof m.content === "string" ? truncateStr(m.content, MAX_MSG_CHARS) : m.content,
+    content: typeof m.content === "string" ? truncateTokens(m.content, MAX_MSG_TOKENS) : m.content,
   });
   rest = rest.map(truncate);
 
-  const totalChars = () =>
-    rest.reduce((a, m) => a + (typeof m.content === "string" ? m.content.length : 0), 0);
-  let curTotal = totalChars();
-  const dropOldestTurn = (arr) => {
-    let k = arr[0]?.role === "user" ? 1 : 0;
-    while (k < arr.length && arr[k].role !== "user") k++;
-    if (k >= arr.length) return arr;
-    const removed = arr.slice(0, k);
-    const subtract = (msgArr) =>
-      msgArr.reduce((a, m) => a + (typeof m.content === "string" ? m.content.length : 0), 0);
-    curTotal -= subtract(removed);
-    return arr.slice(k);
-  };
+  // 按 user 边界切成「轮」(每段 = user + 其后的 assistant/tool)
+  const segs = [];
+  let cur = null;
+  for (const m of rest) {
+    if (m.role === "user") {
+      cur = [m];
+      segs.push(cur);
+    } else {
+      if (!cur) {
+        cur = [];
+        segs.push(cur);
+      }
+      cur.push(m);
+    }
+  }
+  if (segs.length === 0) return [...system];
 
+  const totalTok = segs.reduce((a, seg) => a + seg.reduce((b, m) => b + tok(m), 0), 0);
+  if (totalTok <= budget) return [...system, ...rest];
+
+  const recent = segs.slice(-keepRecent);
+  const old = segs.slice(0, Math.max(0, segs.length - keepRecent));
+  const recentFlat = recent.flat();
+
+  // 久远历史：优先用「小模型结构化记忆」提炼成 JSON，失败则回退到无 LLM 的成对行摘要
+  let head = null;
+  if (summarize && old.length) {
+    try {
+      const memory = await summarize(old.flat());
+      if (memory && memory.trim()) {
+        head = [{ role: "system", content: "【对话记忆 JSON】\n" + memory.trim() }];
+      }
+    } catch {
+      head = null;
+    }
+  }
+  if (!head) {
+    const compressSeg = (seg) => {
+      const out = [];
+      for (const m of seg) {
+        if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+          const names = m.tool_calls
+            .map((t) => t.function?.name)
+            .filter(Boolean)
+            .join(", ");
+          out.push({
+            role: "assistant",
+            content: `【历史工具调用摘要】调用了 ${m.tool_calls.length} 个工具: ${names || "未知"}（原始返回已压缩，不占上下文）`,
+          });
+          continue;
+        }
+        if (m.role === "tool") continue;
+        out.push(m);
+      }
+      return out;
+    };
+    head = old.flatMap(compressSeg);
+  }
+  let newRest = [...head, ...recentFlat];
+
+  // 预算守门：若仍超出，从最旧整段丢弃，直到低于预算（至少保留最近一轮）
+  let curTotal = newRest.reduce((a, m) => a + tok(m), 0);
   let guard = 0;
-  while (rest.length > 2 && curTotal > MAX_PROMPT_CHARS && guard++ < 1000) {
-    rest = dropOldestTurn(rest);
+  while (newRest.length > recentFlat.length && curTotal > budget && guard++ < 1000) {
+    let k = newRest[0]?.role === "user" ? 1 : 0;
+    while (k < newRest.length && newRest[k].role !== "user") k++;
+    if (k >= newRest.length) k = 1;
+    const removed = newRest.slice(0, k);
+    curTotal -= removed.reduce((a, m) => a + tok(m), 0);
+    newRest = newRest.slice(k);
   }
 
-  return [...system, ...rest];
+  return [...system, ...newRest];
 }
 
 function buildToolCalls(acc) {
@@ -75,6 +131,7 @@ export async function* runHarness(
     stream,
     temperature = 0.3,
     maxRounds = 24,
+    summarize = null,
   } = {}
 ) {
   if (!provider || typeof provider.streamChat !== "function") {
@@ -87,7 +144,7 @@ export async function* runHarness(
   for (let round = 0; round < maxRounds; round++) {
     const events = provider.streamChat({
       model,
-      messages: pruneMessages(messages),
+      messages: await pruneMessages(messages, { summarize }),
       tools: toolSchemas,
       temperature,
       signal,
@@ -142,9 +199,9 @@ export async function* runHarness(
           result = { error: String(e && e.message ? e.message : e) };
         }
         if (onTool) onTool(tc.function.name, args, result);
-        const toolContent = truncateStr(
+        const toolContent = truncateTokens(
           JSON.stringify(result),
-          MAX_TOOL_RESULT_CHARS
+          MAX_TOOL_RESULT_TOKENS
         );
         results.push({
           role: "tool",
@@ -184,6 +241,7 @@ export function createHarness({
       onReasoning: opts.onReasoning,
       onToken: opts.onToken,
       maxRounds: opts.maxRounds,
+      toolPermission: opts.toolPermission,
     });
   };
 }

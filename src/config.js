@@ -70,6 +70,16 @@ const apiKey = resolveSecret(resolveEnv((activeProvider && activeProvider.apiKey
 const apiBase = (activeProvider && activeProvider.baseUrl) || process.env.AGNES_API_BASE || "https://apihub.agnes-ai.com";
 const model = (activeProvider && activeProvider.model) || process.env.AGNES_MODEL || "agnes-2.5-flash";
 const temperature = activeProvider?.temperature ?? (process.env.AGNES_TEMPERATURE ? parseFloat(process.env.AGNES_TEMPERATURE) : 0.3);
+const contextBudgetChars = process.env.LKB_CONTEXT_BUDGET
+  ? parseInt(process.env.LKB_CONTEXT_BUDGET, 10)
+  : 240000;
+const contextBudgetTokens = process.env.LKB_CONTEXT_BUDGET_TOKENS
+  ? parseInt(process.env.LKB_CONTEXT_BUDGET_TOKENS, 10)
+  : 60000;
+const keepRecentPairs = process.env.LKB_KEEP_RECENT
+  ? parseInt(process.env.LKB_KEEP_RECENT, 10)
+  : 6;
+const memoryModel = process.env.LKB_MEMORY_MODEL || "";
 
 export const config = {
   apiKey,
@@ -79,6 +89,10 @@ export const config = {
   userHome: process.env.USER_HOME || process.env.HOME || process.env.USERPROFILE || "",
   gatewayToken: process.env.GATEWAY_TOKEN || "",
   temperature,
+  contextBudgetChars,
+  contextBudgetTokens,
+  keepRecentPairs,
+  memoryModel,
 };
 
 // 运行时切换 provider（重新读取工作目录的 providers.json 并刷新配置）

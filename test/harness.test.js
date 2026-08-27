@@ -58,13 +58,13 @@ test("createHarness 返回一个 chat(messages, opts) 函数", async () => {
   assert.equal(out.join(""), "最终回复");
 });
 
-test("pruneMessages 在超出预算时丢弃最早整轮但保留 system", () => {
+test("pruneMessages 在超出预算时丢弃最早整轮但保留 system", async () => {
   const big = "a".repeat(20000);
   const msgs = [{ role: "system", content: "sys" }];
   for (let i = 0; i < 40; i++) {
     msgs.push({ role: i % 2 === 0 ? "user" : "assistant", content: big });
   }
-  const out = pruneMessages(msgs);
+  const out = await pruneMessages(msgs);
   assert.equal(out[0].role, "system");
   assert.ok(out.length < msgs.length, "应丢弃至少一轮");
 });

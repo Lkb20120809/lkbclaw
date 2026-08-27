@@ -8,3 +8,5 @@ node_modules/
 providers.json
 npm_password.txt
 
+
+.lkb-sessions.json

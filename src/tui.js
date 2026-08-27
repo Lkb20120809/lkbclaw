@@ -148,6 +148,22 @@ export function feed(screen, str) {
       continue;
     }
     if (c0 === "\x1b") {
+      if (p.startsWith("\x1b[<")) {
+        const m = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/.exec(p);
+        if (m) {
+          const code = parseInt(m[1], 10);
+          const x = parseInt(m[2], 10) - 1;
+          const y = parseInt(m[3], 10) - 1;
+          const down = m[4] === "M";
+          screen._pending = p.slice(m[0].length);
+          let wheel = 0;
+          if (code === 64) wheel = -1;
+          else if (code === 65) wheel = 1;
+          emit(undefined, { name: "mouse", button: code, x, y, down, wheel });
+          continue;
+        }
+        break;
+      }
       const r = mapEscape(p);
       if (r) {
         screen._pending = p.slice(r.adv);
@@ -174,28 +190,9 @@ function boxTop(b, h) {
   return 0;
 }
 
-function drawBox(screen, grid, b) {
-  const H = screen.height;
-  const W = screen.width;
-  const top = clampInt(boxTop(b, H), 0, H - 1);
-  const left = clampInt(b.position.left ?? 0, 0, W - 1);
-  const width = Math.min(b.position.width ?? W - left, W - left);
-  if (b.type === "list") {
-    drawList(screen, grid, b, top, left, width);
-    return;
-  }
-  const lines = String(b._content || "").split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const r = top + i;
-    if (r < 0 || r >= H) continue;
-    writeCells(grid, r, left, tagsToAnsi(lines[i]), W);
-  }
-}
-
-function drawList(screen, grid, b, top, left, width) {
-  const H = screen.height;
-  const W = screen.width;
-  const height = clampInt(b.position.height || 1, 1, H - top);
+function drawFrame(grid, top, left, width, height) {
+  const H = grid.length;
+  const W = grid[0].length;
   const setCell = (r, c, ch, s) => {
     if (r >= 0 && r < H && c >= 0 && c < W) grid[r][c] = { ch, s: s || "" };
   };
@@ -211,17 +208,76 @@ function drawList(screen, grid, b, top, left, width) {
     setCell(r, left, "│", "");
     setCell(r, left + width - 1, "│", "");
   }
+}
+
+function drawBox(screen, grid, b) {
+  const H = screen.height;
+  const W = screen.width;
+  const top = clampInt(boxTop(b, H), 0, H - 1);
+  const left = clampInt(b.position.left ?? 0, 0, W - 1);
+  const width = Math.min(b.position.width ?? W - left, W - left);
+  if (b.type === "list") {
+    drawList(screen, grid, b, top, left, width);
+    return;
+  }
+  const hasBorder = !!b.border;
+  const height = clampInt(b.position.height || 1, 1, H - top);
+  const bg = b.bg || "";
+  const iTop = top + (hasBorder ? 1 : 0);
+  const iLeft = left + (hasBorder ? 1 : 0);
+  const iW = width - (hasBorder ? 2 : 0);
+  const iH = height - (hasBorder ? 2 : 0);
+  for (let r = iTop; r < iTop + iH; r++) {
+    for (let c = iLeft; c < iLeft + iW; c++) {
+      if (r >= 0 && r < H && c >= 0 && c < W) grid[r][c] = { ch: " ", s: bg };
+    }
+  }
+  if (hasBorder) drawFrame(grid, top, left, width, height);
+  const cTop = iTop;
+  const cLeft = iLeft;
+  const lines = String(b._content || "").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const r = cTop + i;
+    if (r < 0 || r >= H) continue;
+    writeCells(grid, r, cLeft, tagsToAnsi(lines[i]), W);
+  }
+}
+
+function drawList(screen, grid, b, top, left, width) {
+  const H = screen.height;
+  const W = screen.width;
+  const height = clampInt(b.position.height || 1, 1, H - top);
+  const bg = b.bg || "";
+  const setCell = (r, c, ch, s) => {
+    if (r >= 0 && r < H && c >= 0 && c < W) grid[r][c] = { ch, s: s || "" };
+  };
   const innerH = height - 2;
+  for (let r = top + 1; r < top + height - 1; r++) {
+    for (let c = left + 1; c < left + width - 1; c++) {
+      if (r >= 0 && r < H && c >= 0 && c < W) grid[r][c] = { ch: " ", s: bg };
+    }
+  }
+  setCell(top, left, "┌", "");
+  setCell(top, left + width - 1, "┐", "");
+  setCell(top + height - 1, left, "└", "");
+  setCell(top + height - 1, left + width - 1, "┘", "");
+  for (let c = left + 1; c < left + width - 1; c++) {
+    setCell(top, c, "─", "");
+    setCell(top + height - 1, c, "─", "");
+  }
+  for (let r = top + 1; r < top + height - 1; r++) {
+    setCell(r, left, "│", "");
+    setCell(r, left + width - 1, "│", "");
+  }
   const start = Math.max(0, b.selected - innerH + 1);
   for (let i = 0; i < innerH; i++) {
     const idx = start + i;
     const r = top + 1 + i;
     const c = left + 1;
-    setCell(r, c, " ", "");
     if (idx >= b.items.length) continue;
     const it = String(b.items[idx] || "");
     const sel = idx === b.selected;
-    const s = sel ? "\x1b[48;5;6m\x1b[38;5;0m" : "";
+    const s = sel ? "\x1b[48;5;6m\x1b[38;5;0m" : bg;
     let x = c;
     const maxChars = width - 2;
     let written = 0;
@@ -364,9 +420,9 @@ function makeScreen() {
   };
 
   if (process.stdout.isTTY) {
-    process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+    process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b[?1002h\x1b[?1006h");
     process.on("exit", () => {
-      if (process.stdout.isTTY) process.stdout.write("\x1b[?25h\x1b[?1049l");
+      if (process.stdout.isTTY) process.stdout.write("\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l");
     });
     process.stdout.on("resize", () => {
       screen.width = process.stdout.columns || screen.width;

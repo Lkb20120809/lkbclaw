@@ -4,11 +4,49 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
-import { chat, SYSTEM_PROMPT } from "./agent.js";
+import { chat, SYSTEM_PROMPT, summarizeConversation } from "./agent.js";
 import { ensureConfig } from "./setup.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_HTML = fs.readFileSync(path.join(__dirname, "ui.html"), "utf8");
+
+let PKG_VERSION = "0.0.0";
+try {
+  const pj = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+  if (pj && pj.version) PKG_VERSION = pj.version;
+} catch {}
+
+function getVersion() {
+  return PKG_VERSION;
+}
+
+const SESSIONS_FILE = path.resolve(__dirname, "..", ".lkb-sessions.json");
+let sessionsCache = null;
+function loadSessions() {
+  if (sessionsCache) return sessionsCache;
+  try {
+    const raw = fs.readFileSync(SESSIONS_FILE, "utf8");
+    const data = JSON.parse(raw);
+    sessionsCache = Array.isArray(data) ? data : [];
+  } catch {
+    sessionsCache = [];
+  }
+  return sessionsCache;
+}
+function saveSessions() {
+  try {
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessionsCache, null, 2));
+  } catch {}
+}
+function findSession(id) {
+  return loadSessions().find((s) => s.id === id);
+}
+function newSessionId() {
+  return crypto.randomBytes(9).toString("base64url");
+}
+function readBodySafe(req) {
+  return readBody(req).catch(() => ({}));
+}
 
 function isLoopbackHost(h) {
   return (
@@ -72,7 +110,7 @@ async function handleChat(req, res) {
   };
 
   try {
-    for await (const chunk of chat(messages, { onTool, onUsage, onReasoning, model, temperature: body.temperature ?? config.temperature })) {
+    for await (const chunk of chat(messages, { onTool, onUsage, onReasoning, model, temperature: body.temperature ?? config.temperature, summarize: summarizeConversation })) {
       res.write(`data: ${JSON.stringify({ type: "content", content: chunk })}\n\n`);
     }
     res.write("data: [DONE]\n\n");
@@ -171,6 +209,7 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       if (req.method === "GET" && url.pathname === "/health") {
         return sendJSON(res, 200, {
           service: "lkbclaw gateway",
+          version: PKG_VERSION,
           model: config.model,
           routes: {
             "POST /chat": "body {message} or {messages[]} -> SSE stream",
@@ -192,6 +231,59 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
         };
         res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream" });
         return res.end(fs.readFileSync(full));
+      }
+      if (url.pathname === "/api/sessions" || url.pathname.startsWith("/api/sessions/")) {
+        if (req.method === "GET" && url.pathname === "/api/sessions") {
+          const list = loadSessions().map((s) => ({
+            id: s.id,
+            title: s.title,
+            updatedAt: s.updatedAt,
+            messageCount: (s.messages || []).length,
+          }));
+          list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+          return sendJSON(res, 200, { sessions: list });
+        }
+        if (req.method === "POST" && url.pathname === "/api/sessions") {
+          const body = await readBodySafe(req);
+          const sess = {
+            id: newSessionId(),
+            title: (body.title || "新对话").toString().slice(0, 120),
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          loadSessions().push(sess);
+          saveSessions();
+          return sendJSON(res, 200, { session: sess });
+        }
+        const m = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+        if (m) {
+          const id = m[1];
+          if (req.method === "GET") {
+            const s = findSession(id);
+            if (!s) return sendJSON(res, 404, { error: "not found" });
+            return sendJSON(res, 200, { session: s });
+          }
+          if (req.method === "PUT") {
+            const body = await readBodySafe(req);
+            const s = findSession(id);
+            if (!s) return sendJSON(res, 404, { error: "not found" });
+            if (typeof body.title === "string") s.title = body.title.slice(0, 120);
+            if (Array.isArray(body.messages)) s.messages = body.messages;
+            s.updatedAt = Date.now();
+            saveSessions();
+            return sendJSON(res, 200, { session: s });
+          }
+          if (req.method === "DELETE") {
+            const arr = loadSessions();
+            const i = arr.findIndex((s) => s.id === id);
+            if (i < 0) return sendJSON(res, 404, { error: "not found" });
+            arr.splice(i, 1);
+            saveSessions();
+            return sendJSON(res, 200, { ok: true });
+          }
+        }
+        return sendJSON(res, 404, { error: "not found" });
       }
       if (req.method === "POST" && url.pathname === "/chat") {
         return await handleChat(req, res);

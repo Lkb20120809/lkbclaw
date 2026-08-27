@@ -74,3 +74,41 @@ test("box 创建后会挂到父 screen 的 _boxes（draw 才会绘制）", () =>
   bx.setContent("hi");
   assert.equal(bx.getContent(), "hi");
 });
+
+test("pruneMessages: 久远工具调用成对压缩，不产生 orphan tool_calls", async () => {
+  const { pruneMessages } = await import("../src/harness.js");
+  const longOut = "x".repeat(5000);
+  const messages = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "第1轮" },
+    { role: "assistant", content: "", tool_calls: [{ id: "c1", function: { name: "run_command" } }] },
+    { role: "tool", content: longOut, tool_call_id: "c1" },
+    { role: "user", content: "第2轮" },
+    { role: "assistant", content: "回答2" },
+  ];
+  const out = await pruneMessages(messages, { budgetTokens: 100, keepRecent: 1 });
+  const hasOrphan = out.some(
+    (m) =>
+      m.role === "assistant" &&
+      Array.isArray(m.tool_calls) &&
+      m.tool_calls.length &&
+      !out.some((t) => t.role === "tool" && t.tool_call_id === m.tool_calls[0].id)
+  );
+  assert.equal(hasOrphan, false, "不应有孤儿 tool_calls（必须成对）");
+  assert.ok(!out.some((m) => m.role === "tool"), "旧 tool 消息应被成对移除");
+});
+
+test("pruneMessages: 最近轮的工具对保持完整", async () => {
+  const { pruneMessages } = await import("../src/harness.js");
+  const messages = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "u" },
+    { role: "assistant", content: "", tool_calls: [{ id: "c1", function: { name: "run_command" } }] },
+    { role: "tool", content: "ok", tool_call_id: "c1" },
+  ];
+  const out = await pruneMessages(messages, { keepRecent: 4 });
+  const pairOk = out.some(
+    (m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length
+  ) && out.some((m) => m.role === "tool");
+  assert.equal(pairOk, true, "最近的 tool 调用对应应保留");
+});

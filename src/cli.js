@@ -11,8 +11,10 @@ try {
   if (pj && pj.version) PKG_VERSION = pj.version;
 } catch {}
 import { config, setProvider } from "./config.js";
-import { chat, SYSTEM_PROMPT } from "./agent.js";
+import { chat, SYSTEM_PROMPT, summarizeConversation } from "./agent.js";
 import { tools, executeTool } from "./tools.js";
+import { pruneMessages } from "./harness.js";
+import { countTokens } from "./tokens.js";
 import { ensureConfig } from "./setup.js";
 
 /* ============ ANSI 文本配色（真彩色，兼容 16 色终端） ============ */
@@ -27,6 +29,7 @@ const C = {
   err: "{#da3633-fg}",
   brand: "{#ff5a4d-fg}",
   head: "{#cdd9e5-fg}",
+  sel: "{#56d4dd-fg}",
   reset: "{/}",
 };
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -61,21 +64,18 @@ let suggestActive = false;
 let suggestAt = -1;
 
 let sidebarVisible = false;
-let paletteActive = false;
-let paletteFilter = "";
-let paletteSel = 0;
-let paletteItems = [];
+let layoutMode = "default";
 let toastText = "";
 let toastTimer = null;
 
 const COMMANDS = [
-  "/help", "/tools", "/clear", "/save", "/load", "/history",
+  "/help", "/tools", "/clear", "/compress", "/save", "/load", "/history",
   "/model", "/provider", "/mode plan", "/mode build",
   "/todo add", "/todo done", "/todo rm", "/todo list", "/todo clear",
   "/usage", "/download", "/quit",
 ];
 
-let screen, convBox, inputBox, headerBox, statusBox, suggestBox, sidebarBox, paletteBox, toastBox;
+let screen, convBox, inputBox, headerBox, statusBox, suggestBox, sidebarBox, toastBox;
 let convLines = [];
 let convWidth = 80;
 let convHeight = 20;
@@ -167,9 +167,10 @@ function addTurn(userText) {
 function refreshLayout() {
   const sidebarW = 30;
   const reserved = sidebarVisible ? sidebarW + 2 : 0;
-  const maxW = Math.min(screen.width - 4 - reserved, 110);
+  const margin = layoutMode === "compact" ? 1 : 2;
+  const maxW = Math.min(screen.width - margin * 2 - reserved, 200);
   convWidth = Math.max(40, maxW);
-  colLeft = Math.max(1, Math.floor((screen.width - reserved - convWidth) / 2) - 3);
+  colLeft = Math.max(margin, Math.floor((screen.width - reserved - convWidth) / 2));
   convHeight = Math.max(5, screen.height - 7);
   if (headerBox) {
     headerBox.position.left = colLeft;
@@ -180,6 +181,7 @@ function refreshLayout() {
     convBox.position.top = 2;
     convBox.width = convWidth;
     convBox.height = convHeight;
+    convBox.border = { type: "round" };
   }
   if (statusBox) {
     statusBox.position.left = colLeft;
@@ -194,13 +196,6 @@ function refreshLayout() {
     sidebarBox.position.top = 2;
     sidebarBox.width = sidebarW;
     sidebarBox.height = screen.height - 5;
-  }
-  if (paletteBox) {
-    const w = Math.min(64, convWidth);
-    paletteBox.position.left = colLeft + Math.floor((convWidth - w) / 2);
-    paletteBox.position.top = Math.max(2, Math.floor((screen.height - 14) / 2));
-    paletteBox.width = w;
-    paletteBox.height = 14;
   }
   if (toastBox) {
     const w = Math.min(44, convWidth);
@@ -268,8 +263,10 @@ function buildTurnLines(turn, w) {
 }
 
 function renderConv() {
+  const innerW = convWidth - 2;
+  const innerH = convHeight - 2;
   if (turns.length === 0) {
-    const off = Math.max(0, Math.floor(convHeight * 0.2));
+    const off = Math.max(0, Math.floor(innerH * 0.2));
     convLines = [
       ...Array(off).fill(""),
       ...LOGO,
@@ -280,13 +277,13 @@ function renderConv() {
     ];
   } else {
     const all = [];
-    for (const t of turns) all.push(...buildTurnLines(t, convWidth));
+    for (const t of turns) all.push(...buildTurnLines(t, innerW));
     convLines = all;
   }
-  const maxTop = Math.max(0, convLines.length - 1);
-  if (pinBottom) viewTop = Math.max(0, convLines.length - convHeight);
+  const maxTop = Math.max(0, convLines.length - innerH);
+  if (pinBottom) viewTop = Math.max(0, convLines.length - innerH);
   viewTop = clamp(viewTop, 0, maxTop);
-  const win = convLines.slice(viewTop, viewTop + convHeight);
+  const win = convLines.slice(viewTop, viewTop + innerH);
   convBox.setContent(win.join("\n"));
 }
 
@@ -378,21 +375,6 @@ function renderSidebar() {
   if (files.length > 200) lines.push(C.dim + "  …(" + files.length + " 个)" + C.reset);
   sidebarBox.setContent(lines.join("\n"));
   sidebarBox.show();
-}
-
-function renderPalette() {
-  if (!paletteBox) return;
-  if (!paletteActive) {
-    paletteBox.hide();
-    return;
-  }
-  const q = paletteFilter.toLowerCase();
-  paletteItems = COMMANDS.filter((c) => c.toLowerCase().includes(q));
-  if (paletteSel >= paletteItems.length) paletteSel = Math.max(0, paletteItems.length - 1);
-  paletteBox.clearItems();
-  for (const c of paletteItems) paletteBox.addItem(c);
-  paletteBox.select(paletteSel);
-  paletteBox.show();
 }
 
 function showToast(msg) {
@@ -578,7 +560,7 @@ async function handleCommand(text) {
   };
   if (cmd === "help") {
     info(
-      "命令: /help /tools /clear /save [path] /load [path] /history /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /quit"
+      "命令: /help /tools /clear /compress [保留轮数] /save [path] /load [path] /history /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /quit"
     );
     return;
   }
@@ -593,6 +575,19 @@ async function handleCommand(text) {
     pinBottom = true;
     renderConv();
     screen.render();
+    return;
+  }
+  if (cmd === "compress") {
+    const est = (ms) => ms.reduce((a, m) => a + countTokens(typeof m.content === "string" ? m.content : JSON.stringify(m.content || "")), 0);
+    const before = est(messages);
+    const keep = Math.max(2, Math.min(6, parseInt(arg, 10) || 4));
+    const compressed = await pruneMessages(messages, { keepRecent: keep });
+    messages.length = 0;
+    messages.push(...compressed);
+    const after = est(messages);
+    info(
+      `上下文已压缩（保留最近 ${keep} 轮完整，更早的工具调用成对压缩为摘要）。\n估算 token: ${before} → ${after}（模型实际仍可见最近 ${keep} 轮原始内容）`
+    );
     return;
   }
   if (cmd === "model") {
@@ -794,6 +789,7 @@ async function doSend() {
       stream: true,
       temperature: config.temperature,
       signal: abortCtrl.signal,
+      summarize: summarizeConversation,
     })) {
       onText(chunk);
     }
@@ -815,8 +811,10 @@ async function doSend() {
 }
 
 function scrollConv(d) {
-  pinBottom = false;
-  viewTop = clamp(viewTop + d, 0, Math.max(0, convLines.length - 1));
+  const maxTop = Math.max(0, convLines.length - (convHeight - 2));
+  const next = clamp(viewTop + d, 0, maxTop);
+  viewTop = next;
+  pinBottom = next >= maxTop;
   renderConv();
   screen.render();
 }
@@ -852,57 +850,10 @@ function quit() {
 }
 
 function onKey(ch, key) {
-  if (paletteActive) {
-    if (!key) {
-      if (ch && ch >= " ") {
-        paletteFilter += ch;
-        paletteSel = 0;
-        renderPalette();
-        screen.render();
-      }
-      return;
-    }
-    const pk = key.name;
-    if (pk === "escape") {
-      paletteActive = false;
-      renderPalette();
-      screen.render();
-      return;
-    }
-    if (pk === "backspace") {
-      paletteFilter = paletteFilter.slice(0, -1);
-      paletteSel = 0;
-      renderPalette();
-      screen.render();
-      return;
-    }
-    if (pk === "up") {
-      paletteSel = Math.max(0, paletteSel - 1);
-      renderPalette();
-      screen.render();
-      return;
-    }
-    if (pk === "down") {
-      paletteSel = Math.min(Math.max(paletteItems.length - 1, 0), paletteSel + 1);
-      renderPalette();
-      screen.render();
-      return;
-    }
-    if (pk === "enter") {
-      const pick = paletteItems[paletteSel];
-      paletteActive = false;
-      if (pick) {
-        inputBuffer = pick + " ";
-        cursor = inputBuffer.length;
-        computeSuggestions();
-        renderSuggest();
-      }
-      renderPalette();
-      renderInput();
-      screen.render();
-      return;
-    }
-    if (pk === "tab" || pk === "left" || pk === "right" || pk === "home" || pk === "end" || pk === "delete") return;
+  if (key && key.name === "mouse") {
+    const step = Math.max(1, Math.floor((convHeight - 2) / 4));
+    if (key.wheel === -1) scrollConv(-step);
+    else if (key.wheel === 1) scrollConv(step);
     return;
   }
 
@@ -913,14 +864,6 @@ function onKey(ch, key) {
   const k = key.name;
   const shift = key.shift;
 
-  if (k === "p" && key.ctrl) {
-    paletteActive = true;
-    paletteFilter = "";
-    paletteSel = 0;
-    renderPalette();
-    screen.render();
-    return;
-  }
   if (k === "b" && key.ctrl) {
     sidebarVisible = !sidebarVisible;
     refreshLayout();
@@ -931,6 +874,23 @@ function onKey(ch, key) {
     renderSidebar();
     screen.render();
     showToast(sidebarVisible ? "侧边栏 开 (Ctrl-B)" : "侧边栏 关 (Ctrl-B)");
+    return;
+  }
+  if (k === "l" && key.ctrl) {
+    layoutMode = layoutMode === "default" ? "wide" : layoutMode === "wide" ? "compact" : "default";
+    if (layoutMode === "wide") sidebarVisible = true;
+    refreshLayout();
+    renderConv();
+    renderHeader();
+    renderStatus();
+    renderInput();
+    renderSidebar();
+    screen.render();
+    showToast(
+      "布局: " +
+        (layoutMode === "default" ? "默认" : layoutMode === "wide" ? "宽屏(侧栏常驻)" : "紧凑") +
+        " (Ctrl-L 切换)"
+    );
     return;
   }
 
@@ -1130,23 +1090,6 @@ export async function main() {
     border: { type: "round" },
     label: " 侧边栏 ",
     style: { border: { fg: "cyan" } },
-  });
-
-  paletteBox = blessed.list({
-    parent: screen,
-    left: 0,
-    top: 2,
-    width: 64,
-    height: 14,
-    tags: false,
-    hidden: true,
-    border: { type: "round" },
-    label: " 命令面板 (Ctrl-P) ",
-    style: {
-      border: { fg: "cyan" },
-      selected: { bg: "cyan", fg: "black" },
-      item: { fg: "white" },
-    },
   });
 
   toastBox = blessed.box({

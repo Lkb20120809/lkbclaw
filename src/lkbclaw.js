@@ -2,9 +2,13 @@
 import readline from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import { main as cliMain } from "./cli.js";
 import { startGateway } from "./gateway.js";
 import { encryptSecret } from "./keystore.js";
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
 function help() {
   console.log(`
@@ -16,13 +20,52 @@ lkbclaw - AI 开发助手
   lkbclaw -gateway     启动本地网关服务（默认端口 8787，可用 --port 指定）
   lkbclaw -keygen      生成加密的 API Key 密文（用于密文共享给所有用户）
   lkbclaw -onbread     新建/引导配置一个模型 API（交互向导，含真实连通测试）
+  lkbclaw -version     查看当前版本
+  lkbclaw -update      更新 lkbclaw 到最新版本（npm 全局）
   lkbclaw -h           显示本帮助
 
-示例:
-  lkbclaw -cli "用 edit_file 把 src/agent.js 里的温度改成 0.2"
-  lkbclaw -gateway --port 9000
-  lkbclaw -keygen
+ 示例:
+   lkbclaw -cli "用 edit_file 把 src/agent.js 里的温度改成 0.2"
+   lkbclaw -gateway --port 9000
+   lkbclaw -keygen
 `);
+}
+
+function pkgVersion() {
+  try {
+    const pj = path.resolve(scriptDir, "..", "package.json");
+    return JSON.parse(fs.readFileSync(pj, "utf8")).version;
+  } catch {
+    return "?";
+  }
+}
+
+async function update() {
+  const cur = pkgVersion();
+  console.log("正在查询最新版本…");
+  const latest = await new Promise((res) => {
+    const p = spawn("npm", ["view", "lkbclaw", "version"], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.on("close", (c) => res(c === 0 ? out.trim() : null));
+  });
+  if (!latest) {
+    console.error("无法获取最新版本，请手动执行: npm install -g lkbclaw@latest");
+    return;
+  }
+  if (latest === cur) {
+    console.log(`已经是最新版本 (${cur})`);
+    return;
+  }
+  console.log(`当前 ${cur} → 最新 ${latest}，正在更新…`);
+  await new Promise((resolve) => {
+    const p = spawn("npm", ["install", "-g", "lkbclaw@latest"], { stdio: "inherit" });
+    p.on("close", (c) => {
+      if (c === 0) console.log(`\n✅ 已更新到 ${latest}，重启终端后生效 (lkbclaw -version)`);
+      else console.error("\n更新失败，请手动执行: npm install -g lkbclaw@latest");
+      resolve();
+    });
+  });
 }
 
 function readStdinAll() {
@@ -272,6 +315,16 @@ async function run() {
 
   if (cmd === "-onbread") {
     await onbread();
+    return;
+  }
+
+  if (cmd === "-version" || cmd === "--version" || cmd === "-v") {
+    console.log("lkbclaw " + pkgVersion());
+    return;
+  }
+
+  if (cmd === "-update" || cmd === "--update") {
+    await update();
     return;
   }
 

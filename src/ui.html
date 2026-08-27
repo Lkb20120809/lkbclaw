@@ -435,6 +435,7 @@ body {
       </div>
       <div class="topbar-right">
         <div class="badge" id="modelBadge"><span class="dot" id="statusDot"></span><span id="model2">—</span></div>
+        <div class="badge" id="verBadge" title="lkbclaw 版本">v?</div>
         <div class="iconbtn" id="togglePanel" title="仪表盘面板">
           <svg viewBox="0 0 24 24"><path d="M3 13h4l3 7 4-14 3 7h4"/></svg>
         </div>
@@ -452,7 +453,7 @@ body {
         <p>面向开发者与 AI 智能体运维的现代对话工作台。输入消息开始，或使用斜杠命令。</p>
         <div class="hint">
           <span class="chip">/help</span><span class="chip">/clear</span><span class="chip">/model</span>
-          <span class="chip">/provider</span><span class="chip">/mode</span><span class="chip">/todo</span>
+          <span class="chip">/provider</span><span class="chip">/mode</span><span class="chip">/todo</span><span class="chip">/compress</span>
         </div>
       </div></div>
     </div>
@@ -602,7 +603,6 @@ body {
 <script>
 const params = new URLSearchParams(location.search);
 const token = params.get("token") || "";
-const LS_KEY = "lkbclaw-sessions";
 const LS_PREF = "lkbclaw-prefs";
 
 /* ---------- preferences ---------- */
@@ -623,8 +623,8 @@ function applyPrefs(){
 function setPref(k,v){ prefs[k]=v; savePrefs(); applyPrefs(); }
 
 /* ---------- state ---------- */
-let sessions = load();
-let currentId = sessions.length ? sessions[0].id : null;
+let sessions = [];
+let currentId = null;
 let lastUsage = null;
 let abortCtrl = null;
 let busy = false;
@@ -643,6 +643,7 @@ const statusbar = document.getElementById("statusbar");
 const statusText = document.getElementById("statusText");
 const statusDot = document.getElementById("statusDot");
 const cmdPalette = document.getElementById("cmdPalette");
+const verBadge = document.getElementById("verBadge");
 
 const SLASH_COMMANDS = [
   { name:"/help", desc:"显示可用命令" },
@@ -653,12 +654,36 @@ const SLASH_COMMANDS = [
   { name:"/mode", desc:"切换 PLAN / BUILD 模式（本地提示）" },
   { name:"/todo", desc:"查看待办清单" },
   { name:"/download", desc:"抓取网页资源 /download <url>" },
+  { name:"/compress", desc:"压缩上下文 /compress [保留轮数]" },
 ];
 
-function load(){ try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch { return []; } }
-function save(){ localStorage.setItem(LS_KEY, JSON.stringify(sessions)); }
-function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function current(){ return sessions.find(s=>s.id===currentId); }
+
+const apiQ = token ? ("?token=" + encodeURIComponent(token)) : "";
+async function apiGetSessions(){ const r = await fetch("/api/sessions" + apiQ); const j = await r.json(); return j.sessions || []; }
+async function apiGetSession(id){ const r = await fetch("/api/sessions/" + encodeURIComponent(id) + apiQ); const j = await r.json(); return j.session; }
+async function apiCreateSession(title){
+  const r = await fetch("/api/sessions" + apiQ, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ title: title || "新对话" }) });
+  const j = await r.json(); return j.session;
+}
+async function apiSaveSession(s){
+  try { await fetch("/api/sessions/" + encodeURIComponent(s.id) + apiQ, { method:"PUT", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ title: s.title, messages: s.messages }) }); } catch {}
+}
+async function apiDeleteSession(id){
+  try { await fetch("/api/sessions/" + encodeURIComponent(id) + apiQ, { method:"DELETE" }); } catch {}
+}
+function save(){ const s = current(); if (s) apiSaveSession(s); }
+async function refreshSessions(){ sessions = await apiGetSessions(); }
+async function openSession(id){
+  const full = await apiGetSession(id);
+  if (!full) return;
+  const i = sessions.findIndex((s) => s.id === id);
+  if (i >= 0) sessions[i] = full; else sessions.push(full);
+  currentId = id;
+  renderSessions();
+  renderChat();
+  updateTitle();
+}
 
 /* ---------- model ---------- */
 async function loadModel(){
@@ -666,6 +691,7 @@ async function loadModel(){
     const r = await fetch("/health" + (token ? "?token=" + encodeURIComponent(token) : ""));
     const j = await r.json();
     if (j.model){ model2El.textContent = j.model; modelPill.textContent = j.model; fillModelCard(j); }
+    if (j.version){ verBadge.textContent = "v" + j.version; verBadge.title = "lkbclaw v" + j.version; }
   } catch {}
 }
 function fillModelCard(j){
@@ -684,7 +710,7 @@ function renderSessions(){
     d.className = "sess" + (s.id===currentId ? " active":"");
     d.textContent = s.title || "（空对话）";
     d.title = s.title || "（空对话）";
-    d.onclick = ()=>{ currentId=s.id; renderSessions(); renderChat(); };
+    d.onclick = ()=> openSession(s.id);
     sessionsEl.appendChild(d);
   }
 }
@@ -936,9 +962,9 @@ function setBusy(b){
   if(b) statusDot.style.background="var(--accent)", statusDot.style.boxShadow="0 0 8px var(--accent)";
   else { statusDot.style.background="var(--green)"; statusDot.style.boxShadow="0 0 8px var(--green)"; }
 }
-function newSession(){
-  const s={id:uid(), title:"新对话", messages:[]};
-  sessions.unshift(s); currentId=s.id; save(); renderSessions(); renderChat();
+async function newSession(){
+  const s = await apiCreateSession("新对话");
+  sessions.unshift(s); currentId = s.id; renderSessions(); renderChat(); save();
 }
 async function runSlash(cmd){
   const [name, ...rest] = cmd.split(/\s+/);
@@ -952,7 +978,15 @@ async function runSlash(cmd){
     case "/mode": local("PLAN / BUILD 模式为 CLI 端特性：\n- **BUILD**：默认，直接执行工具与改动。\n- **PLAN**：先产出方案供确认，再执行（Shift+Tab 切换）。"); return true;
     case "/todo": local("待办清单由 Agent 在对话中通过工具维护；本界面随消息流式展示工具调用状态。"); return true;
     case "/download": local(arg? `将抓取资源：\`${arg}\`（由 Agent 的 download 工具执行）。` : "用法：/download <url> [dest]"); return true;
-    case "/help": local("可用命令：\n- /clear 清空会话\n- /new 新建对话\n- /model 当前模型\n- /provider 渠道配置\n- /mode PLAN/BUILD 说明\n- /todo 待办清单\n- /download <url> 抓取资源"); return true;
+    case "/help": local("可用命令：\n- /clear 清空会话\n- /new 新建对话\n- /model 当前模型\n- /provider 渠道配置\n- /mode PLAN/BUILD 说明\n- /todo 待办清单\n- /download <url> 抓取资源\n- /compress [保留轮数] 压缩上下文"); return true;
+    case "/compress": {
+      const s = current();
+      const keep = Math.max(2, Math.min(8, parseInt(arg, 10) || 4));
+      if (s){ s.messages = compressMessages(s.messages, keep); save(); renderChat(); }
+      addTimeline("info", "压缩上下文", "/compress 保留最近 " + keep + " 轮");
+      local("上下文已压缩：保留最近 " + keep + " 轮完整，更早的工具调用成对压缩为摘要。发送时网关还会按预算再做一次服务端压缩。");
+      return true;
+    }
     default: return false;
   }
 }
@@ -962,7 +996,7 @@ async function send(){
   if(text.startsWith("/")){
     if(await runSlash(text)){ inputEl.value=""; autoGrow(); return; }
   }
-  if(!currentId) newSession();
+  if(!currentId) await newSession();
   const s=current();
   s.messages.push({role:"user", content:text});
   if(s.title==="新对话") s.title=text.slice(0,24);
@@ -1028,6 +1062,33 @@ async function send(){
   } finally { setBusy(false); abortCtrl=null; renderSessions(); }
 }
 function cleanForApi(messages){ return messages.filter(m=>m.role==="user"||m.role==="assistant"); }
+function compressMessages(messages, keepRecent){
+  keepRecent = keepRecent || 4;
+  const sys = (messages[0] && messages[0].role === "system") ? [messages[0]] : [];
+  const rest = sys.length ? messages.slice(1) : messages.slice();
+  const segs = []; let cur = null;
+  for (const m of rest){
+    if (m.role === "user"){ cur = [m]; segs.push(cur); }
+    else { if (!cur){ cur = []; segs.push(cur); } cur.push(m); }
+  }
+  if (!segs.length) return sys.slice();
+  const recent = segs.slice(-keepRecent);
+  const old = segs.slice(0, segs.length - keepRecent);
+  const compressSeg = (seg) => {
+    const out = [];
+    for (const m of seg){
+      if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length){
+        const names = m.tool_calls.map(t => t.function && t.function.name).filter(Boolean).join(", ");
+        out.push({ role: "assistant", content: "【历史工具调用摘要】调用了 " + m.tool_calls.length + " 个工具: " + (names || "未知") + "（原始返回已压缩）" });
+        continue;
+      }
+      if (m.role === "tool") continue;
+      out.push(m);
+    }
+    return out;
+  };
+  return [...sys, ...old.flatMap(compressSeg), ...recent.flat()];
+}
 function autoGrow(){ inputEl.style.height="auto"; inputEl.style.height=Math.min(inputEl.scrollHeight,200)+"px"; }
 
 /* ---------- command palette ---------- */
@@ -1178,10 +1239,19 @@ window.addEventListener("keydown",(e)=>{ if(e.key==="Escape"){ hideCmd(); themeM
 
 applyPrefs();
 loadModel();
-renderSessions();
-renderChat();
 renderChannelsPlaceholder();
 addTimeline("info","界面已就绪","lkbclaw control ui");
+(async () => {
+  try {
+    await refreshSessions();
+    if (sessions.length) await openSession(sessions[0].id);
+    else await newSession();
+  } catch (e) {
+    addTimeline("err", "加载会话失败", e.message);
+  }
+  renderSessions();
+  renderChat();
+})();
 </script>
 </body>
 </html>

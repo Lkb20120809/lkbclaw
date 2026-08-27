@@ -154,6 +154,43 @@ function createOpenAIProvider(cfg) {
   };
 }
 
+const MEMORY_SYSTEM_PROMPT = `你负责把一段较早的对话提炼成结构化长期记忆，供后续对话恢复上下文。只输出一个 JSON 对象（不要代码块、不要多余解释），字段可包含：
+- key_facts: 关键事实或结论（数组）
+- decisions: 已作出的决策（数组）
+- files_changed: 涉及的文件及改动要点（数组）
+- user_preferences: 用户偏好或工程约定（数组）
+- open_tasks: 仍未完成的事项（数组）
+- unresolved: 未解决或待确认的问题/风险（数组）
+若某项无信息，给空数组。`;
+
+const memoryProvider = createOpenAIProvider(config);
+
+export async function summarizeConversation(messages) {
+  const model = config.memoryModel || config.model;
+  const payload = [
+    { role: "system", content: MEMORY_SYSTEM_PROMPT },
+    ...messages.map((m) => ({
+      role: m.role,
+      content: typeof m.content === "string" ? m.content : JSON.stringify(m.content || ""),
+    })),
+  ];
+  let acc = "";
+  for await (const ev of memoryProvider.streamChat({
+    model,
+    messages: payload,
+    stream: false,
+    temperature: 0.1,
+  })) {
+    const d = ev?.choices?.[0]?.delta;
+    const c = d?.content || d?.text;
+    if (c) acc += c;
+  }
+  let json = acc.trim();
+  const fence = json.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fence) json = fence[1].trim();
+  return json;
+}
+
 export const chat = createHarness({
   provider: createOpenAIProvider(config),
   toolExecutor: executeTool,
