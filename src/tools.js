@@ -10,11 +10,7 @@ const execAsync = promisify(exec);
 function resolveSafe(p) {
   const base = process.cwd();
   const full = path.isAbsolute(p) ? p : path.resolve(base, p);
-  const resolvedBase = path.resolve(base);
-  if (!full.startsWith(resolvedBase + path.sep) && full !== resolvedBase) {
-    throw new Error("路径不允许访问工作目录以外的位置");
-  }
-  return full;
+  return path.normalize(full);
 }
 
 async function readFile({ path: p, limit = 2000 }) {

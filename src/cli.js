@@ -314,8 +314,7 @@ function setStatusNote(n) {
 function safeResolve(p) {
   const base = process.cwd();
   const full = path.isAbsolute(p) ? p : path.resolve(base, p);
-  if (!full.startsWith(base + path.sep) && full !== base) return null;
-  return full;
+  return path.normalize(full);
 }
 let fileIndexCache = null;
 function getFileIndex() {

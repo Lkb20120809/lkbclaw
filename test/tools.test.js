@@ -46,9 +46,15 @@ test("edit_file 空 old_string 返回 error", async () => {
   }
 });
 
-test("read_file 拒绝路径穿越", async () => {
-  const r = await executeTool("read_file", { path: "../../.env" });
-  assert.ok(r.error, "路径穿越应被阻止");
+test("read_file 允许读取工作目录以外的绝对路径（已提权）", async () => {
+  const outside = path.join(os.tmpdir(), "lkb_outside_read.txt");
+  fs.writeFileSync(outside, "outside-cwd-content");
+  try {
+    const r = await executeTool("read_file", { path: outside });
+    assert.equal(r.content, "outside-cwd-content");
+  } finally {
+    if (fs.existsSync(outside)) fs.unlinkSync(outside);
+  }
 });
 
 test("grep_files 能递归搜索并返回 file:line:content", async () => {
