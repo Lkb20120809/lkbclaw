@@ -80,7 +80,7 @@ let layoutMode = "default";
 let toastTimer = null;
 
 const COMMANDS = [
-  "/help", "/tools", "/clear", "/compress", "/save", "/load", "/list", "/history",
+  "/help", "/tools", "/clear", "/compress", "/save", "/load", "/list", "/tools-detail", "/history",
   "/model", "/provider", "/mode plan", "/mode build",
   "/todo add", "/todo done", "/todo rm", "/todo list", "/todo clear",
   "/usage", "/download", "/quit",
@@ -569,12 +569,19 @@ async function handleCommand(text) {
   };
   if (cmd === "help") {
     info(
-      "命令: /help /tools /clear /compress [保留轮数] /save [标题|路径] /load <id|路径> /list /history /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /quit"
+      "命令: /help /tools /clear /compress [保留轮数] /save [标题|路径] /load <id|路径> /list /history /tools-detail /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /quit" + "\n提示: Tab 可在「折叠 / 展开」工具调用详情之间切换；长输出可用鼠标滚轮滚动。"
     );
     return;
   }
   if (cmd === "tools") {
     info("可用工具:\n" + tools.map((t) => "  - " + t.name + ": " + t.description).join("\n"));
+    return;
+  }
+  if (cmd === "tools-detail") {
+    showToolDetails = !showToolDetails;
+    info("工具详情: " + (showToolDetails ? "展开（显示参数与完整结果）" : "折叠（仅显示摘要）"));
+    renderConv();
+    screen.render();
     return;
   }
   if (cmd === "clear") {

@@ -198,6 +198,28 @@ async function testConn(baseUrl, apiKey, model) {
   }
 }
 
+async function detectOllama() {
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 1200);
+    const r = await fetch("http://localhost:11434/api/tags", { signal: ac.signal });
+    clearTimeout(t);
+    if (!r.ok) return { running: false, models: [] };
+    const j = await r.json();
+    const models = Array.isArray(j.models) ? j.models.map((m) => m.name) : [];
+    return { running: true, models };
+  } catch {
+    return { running: false, models: [] };
+  }
+}
+
+function haveConfig() {
+  const prov = path.resolve(process.cwd(), "providers.json");
+  if (fs.existsSync(prov)) return true;
+  if (process.env.AGNES_API_KEY) return true;
+  return false;
+}
+
 async function onbread() {
   console.log("\n========================================================");
   console.log("   lkbclaw 新手引导 · 新建 / 配置一个模型 API (onbread)");
@@ -207,7 +229,19 @@ async function onbread() {
   console.log("提示：密钥等同于账号密码，不要分享、不要提交 Git。");
   console.log("随时按 Ctrl+C 可退出；连通失败时也能选择“跳过测试先保存”。\n");
 
+  const ollama = await detectOllama();
+  if (ollama.running) {
+    console.log(
+      "✅ 检测到本地 Ollama 正在运行（localhost:11434），可用模型: " +
+        (ollama.models.join(", ") || "(无模型，请先 ollama pull)")
+    );
+    console.log("");
+  }
+
   const providers = [
+    ...(ollama.running
+      ? [{ label: `Ollama（本地，已检测到 ${ollama.models.length} 个模型）`, value: { name: "ollama", baseUrl: "http://localhost:11434" } }]
+      : []),
     { label: "OpenAI (api.openai.com)", value: { name: "openai", baseUrl: "https://api.openai.com" } },
     { label: "DeepSeek (api.deepseek.com)", value: { name: "deepseek", baseUrl: "https://api.deepseek.com" } },
     { label: "智谱 Zhipu (open.bigmodel.cn)", value: { name: "zhipu", baseUrl: "https://open.bigmodel.cn/api/paas/v4" } },
@@ -244,7 +278,13 @@ async function onbread() {
   }
 
   const modelDef = p.value.name === "ollama" ? "qwen2.5" : p.value.name === "deepseek" ? "deepseek-chat" : p.value.name === "qwen" ? "qwen-plus" : "gpt-4o-mini";
-  const model = (await readLineRaw("③ 默认模型 (留空=" + modelDef + "): ")).trim() || modelDef;
+  let model;
+  if (p.value.name === "ollama" && ollama.models.length) {
+    const pick = await choice("③ 选择本地 Ollama 模型:", ollama.models.map((m) => ({ label: m, value: m })));
+    model = pick.value;
+  } else {
+    model = (await readLineRaw("③ 默认模型 (留空=" + modelDef + "): ")).trim() || modelDef;
+  }
 
   while (true) {
     if (!apiKey) {
@@ -326,11 +366,19 @@ async function run() {
   }
 
   if (cmd === "-cli" || cmd === "-c") {
+    if (!haveConfig()) {
+      console.log("未检测到配置（providers.json / AGNES_API_KEY），先运行新手引导：\n");
+      await onbread();
+    }
     await cliMain();
     return;
   }
 
   if (cmd === "-gateway" || cmd === "-g") {
+    if (!haveConfig()) {
+      console.log("未检测到配置（providers.json / AGNES_API_KEY），先运行新手引导：\n");
+      await onbread();
+    }
     let port = 8787;
     let host = "127.0.0.1";
     const i = args.indexOf("--port");

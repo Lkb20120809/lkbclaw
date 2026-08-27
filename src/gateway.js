@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import { chat, SYSTEM_PROMPT, summarizeConversation } from "./agent.js";
 import { ensureConfig } from "./setup.js";
 import { loadSessions, saveSessions, findSession, newSessionId, upsertSession } from "./sessions.js";
+import { info as logInfo, error as logError } from "./logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_HTML = fs.readFileSync(path.join(__dirname, "ui.html"), "utf8");
@@ -121,6 +122,7 @@ async function handleChat(req, res) {
   console.log(
     `${tag} \x1b[35m[chat]\x1b[0m model=${model || config.model} msgs=${messages.length}`
   );
+  logInfo("chat_start", { tag, model: model || config.model, msgs: messages.length });
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -138,6 +140,7 @@ async function handleChat(req, res) {
     console.log(
       `${tag}   \x1b[33m→ 命令\x1b[0m ${name} ${clip(args)} => ${clip(result)}`
     );
+    logInfo("tool", { tag, name, args: clip(args, 400), blocked: !!(result && result.blocked) });
   };
   const onUsage = (u) => {
     res.write(`data: ${JSON.stringify({ type: "usage", usage: u })}\n\n`);
@@ -155,9 +158,10 @@ async function handleChat(req, res) {
     }
     res.write("data: [DONE]\n\n");
   } catch (e) {
-    console.error(`\x1b[31m[chat] 出错: ${e.stack || e.message}\x1b[0m`);
-    res.write(`data: ${JSON.stringify({ error: friendlyError(e) })}\n\n`);
-    res.write("data: [DONE]\n\n");
+  console.error(`\x1b[31m[chat] 出错: ${e.stack || e.message}\x1b[0m`);
+  logError("chat_error", { tag, error: e.message });
+  res.write(`data: ${JSON.stringify({ error: friendlyError(e) })}\n\n`);
+  res.write("data: [DONE]\n\n");
   }
   res.end();
 }
@@ -167,6 +171,7 @@ async function handleProxy(req, res) {
   console.log(
     `\x1b[34m[proxy]\x1b[0m ${config.apiBase}/v1/chat/completions stream=${!!body.stream}`
   );
+  logInfo("proxy", { target: config.apiBase + "/v1/chat/completions", stream: !!body.stream });
   const upstream = await fetch(`${config.apiBase}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -235,6 +240,7 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       console.log(
         `\x1b[2m${new Date().toISOString()}\x1b[0m ${tag}${color}${req.method} ${url.pathname}\x1b[0m -> ${status} (${ms}ms)`
       );
+      logInfo("request", { method: req.method, path: url.pathname, status, ms, tag: res.__logTag || "" });
     });
 
     const token = config.gatewayToken;
@@ -362,11 +368,12 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       }
       return sendJSON(res, 404, { error: "not found" });
     } catch (e) {
-      console.error(
-        `\x1b[31m请求处理出错 ${req.method} ${url.pathname}: ${e.stack || e.message}\x1b[0m`
-      );
-      if (!res.headersSent) sendJSON(res, 500, { error: friendlyError(e) });
-      else res.end();
+    console.error(
+      `\x1b[31m请求处理出错 ${req.method} ${url.pathname}: ${e.stack || e.message}\x1b[0m`
+    );
+    logError("request_error", { method: req.method, path: url.pathname, error: e.message });
+    if (!res.headersSent) sendJSON(res, 500, { error: friendlyError(e) });
+    else res.end();
     }
   });
 

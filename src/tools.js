@@ -1,9 +1,51 @@
 import fsp from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { exec, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
+
+// 危险命令沙盒：命中以下模式的命令默认被拦截（设置 LKB_ALLOW_DANGEROUS=1 可放行）
+const DANGEROUS_PATTERNS = [
+  /\brm\s+-rf?\s+\//,
+  /\brm\s+-rf?\s+~\//,
+  /\brm\s+-rf?\s+\*\s*$/,
+  /\bmkfs\b/,
+  /\bdd\s+if=.*of=\/dev\//,
+  /:\s*\(\)\s*\{/,
+  /\bshutdown\b/,
+  /\bhalt\b/,
+  /\bformat\s+[a-z]:/i,
+  /\b>\s*\/dev\/sd[a-z]/,
+  /\bchmod\s+-R\s+000\b/,
+  /\b(curl|wget)\b[^\n|]*\|\s*(sh|bash)\b/,
+];
+
+function isDangerous(cmd) {
+  const c = (cmd || "").toString();
+  for (const re of DANGEROUS_PATTERNS) {
+    if (re.test(c)) return "命中危险模式 " + re;
+  }
+  return null;
+}
+
+// 审计：记录每次工具调用到 .lkb-tool-audit.log（可用 LKB_TOOL_AUDIT 改路径）
+function auditLog(name, args, result) {
+  try {
+    const entry = {
+      t: new Date().toISOString(),
+      tool: name,
+      args: typeof args === "string" ? args : JSON.stringify(args),
+      ok: !result || !(result.error || result.blocked),
+      blocked: !!(result && result.blocked),
+      error: result && result.error ? String(result.error).slice(0, 300) : undefined,
+    };
+    const f = process.env.LKB_TOOL_AUDIT || ".lkb-tool-audit.log";
+    fs.appendFileSync(f, JSON.stringify(entry) + "\n");
+  } catch {}
+}
 
 function resolveSafe(p) {
   const base = process.cwd();
@@ -56,6 +98,14 @@ async function listFiles({ path: p = "." }) {
 }
 
 async function runCommand({ command, timeout = 60000 }) {
+  const reason = isDangerous(command);
+  if (reason && process.env.LKB_ALLOW_DANGEROUS !== "1") {
+    return {
+      blocked: true,
+      error:
+        "已拦截危险命令（" + reason + "）。如确认环境安全需执行，请设置 LKB_ALLOW_DANGEROUS=1。",
+    };
+  }
   try {
     const { stdout, stderr } = await execAsync(command, {
       timeout,
@@ -269,7 +319,7 @@ async function runTests({ command } = {}) {
   return runCommand({ command: cmd, timeout: 300000 });
 }
 
-export const tools = [
+const builtinTools = [
   {
     name: "read_file",
     description: "Read a file from the filesystem. Returns its text content.",
@@ -426,6 +476,40 @@ export const tools = [
   },
 ];
 
+// 插件化工具系统：从 LKB_PLUGINS_DIR（默认 <模块目录>/plugins）加载第三方工具
+// 每个插件文件默认导出一个对象：{ name, description, parameters, run, permission? }
+// permission 取值：readonly | write | dangerous（仅作元数据，run_command 自带危险拦截）
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+async function loadPlugins() {
+  const dir = process.env.LKB_PLUGINS_DIR || path.resolve(__dirname, "plugins");
+  const loaded = [];
+  try {
+    if (!fs.existsSync(dir)) return loaded;
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".mjs") || f.endsWith(".js"));
+    for (const f of files) {
+      try {
+        const mod = await import(pathToFileURL(path.join(dir, f)).href);
+        const p = mod.default || mod;
+        if (p && p.name && typeof p.run === "function") {
+          if (builtinTools.find((t) => t.name === p.name)) {
+            console.warn(`插件 ${p.name} 与内置工具重名，已跳过`);
+            continue;
+          }
+          loaded.push(p);
+        }
+      } catch (e) {
+        console.warn(`插件加载失败 ${f}: ${e.message}`);
+      }
+    }
+  } catch {}
+  return loaded;
+}
+
+const plugins = await loadPlugins();
+export const tools = [...builtinTools, ...plugins];
+
 export const toolSchemas = tools.map((t) => ({
   type: "function",
   function: {
@@ -437,10 +521,18 @@ export const toolSchemas = tools.map((t) => ({
 
 export async function executeTool(name, args) {
   const tool = tools.find((t) => t.name === name);
-  if (!tool) return { error: `Unknown tool: ${name}` };
+  if (!tool) {
+    const r = { error: `Unknown tool: ${name}` };
+    auditLog(name, args, r);
+    return r;
+  }
   try {
-    return await tool.run(args || {});
+    const r = await tool.run(args || {});
+    auditLog(name, args, r);
+    return r;
   } catch (e) {
-    return { error: String(e.message || e) };
+    const r = { error: String(e.message || e) };
+    auditLog(name, args, r);
+    return r;
   }
 }
