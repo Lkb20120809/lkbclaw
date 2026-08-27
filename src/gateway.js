@@ -53,6 +53,39 @@ function sendJSON(res, code, obj) {
   res.end(body);
 }
 
+function metricsText(m) {
+  const up = Math.floor((Date.now() - m.startTime) / 1000);
+  const lines = [];
+  const counter = (name, desc, value) => {
+    lines.push(`# HELP lkb_${name} ${desc}`);
+    lines.push(`# TYPE lkb_${name} counter`);
+    lines.push(`lkb_${name} ${value}`);
+  };
+  counter("requests_total", "Total HTTP requests handled by the gateway", m.requests);
+  counter("errors_total", "Total HTTP responses with status >= 400", m.errors);
+  counter("tokens_prompt_total", "Total prompt tokens consumed across chats", m.promptTokens);
+  counter("tokens_completion_total", "Total completion tokens generated across chats", m.completionTokens);
+  counter("tool_calls_total", "Total tool/command invocations across chats", m.toolCalls);
+  counter("uptime_seconds", "Gateway process uptime in seconds", up);
+  return lines.join("\n") + "\n";
+}
+
+function sendMetrics(res, m) {
+  res.writeHead(200, {
+    "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+  });
+  res.end(metricsText(m));
+}
+
+const metrics = {
+  startTime: Date.now(),
+  requests: 0,
+  errors: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  toolCalls: 0,
+};
+
 // 把常见底层错误转成用户能看懂的提示（原始信息仍会打到网关日志，便于排查）
 function friendlyError(e) {
   const msg = (e && e.message ? e.message : String(e)) || "";
@@ -101,12 +134,15 @@ async function handleChat(req, res) {
   };
   const onTool = (name, args, result) => {
     res.write(`data: ${JSON.stringify({ type: "tool", name, args, result })}\n\n`);
+    metrics.toolCalls++;
     console.log(
       `${tag}   \x1b[33m→ 命令\x1b[0m ${name} ${clip(args)} => ${clip(result)}`
     );
   };
   const onUsage = (u) => {
     res.write(`data: ${JSON.stringify({ type: "usage", usage: u })}\n\n`);
+    metrics.promptTokens += u.prompt_tokens || 0;
+    metrics.completionTokens += u.completion_tokens || 0;
     console.log(`${tag}   \x1b[2musage\x1b[0m ${clip(u)}`);
   };
   const onReasoning = (text) => {
@@ -192,6 +228,8 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       activeRequests = Math.max(0, activeRequests - 1);
       const ms = Date.now() - reqStart;
       const status = res.statusCode;
+      metrics.requests++;
+      if (status >= 400) metrics.errors++;
       const color = status >= 500 ? "\x1b[31m" : status >= 400 ? "\x1b[33m" : "\x1b[36m";
       const tag = res.__logTag ? res.__logTag + " " : "";
       console.log(
@@ -242,6 +280,9 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
             "POST /v1/chat/completions": "proxy to Agnes API (supports stream)",
           },
         });
+      }
+      if (req.method === "GET" && url.pathname === "/metrics") {
+        return sendMetrics(res, metrics);
       }
       if (req.method === "GET" && url.pathname.startsWith("/vendor/")) {
         const base = path.resolve(__dirname, "vendor");
