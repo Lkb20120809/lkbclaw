@@ -232,8 +232,7 @@ async function onbread() {
     { label: "使用环境变量（如 AGNES_API_KEY）", value: "env" },
     { label: "使用 .env 文件里的变量（lkbclaw 会自动加载 .env）", value: "dotenv" },
   ], 0);
-  let apiKey = "";
-  let apiKeyStored = "";
+  let apiKey, apiKeyStored;
   if (source.value === "paste") {
     apiKey = await readLineRaw("请输入 API Key: ", true);
     apiKeyStored = apiKey;
@@ -247,8 +246,7 @@ async function onbread() {
   const modelDef = p.value.name === "ollama" ? "qwen2.5" : p.value.name === "deepseek" ? "deepseek-chat" : p.value.name === "qwen" ? "qwen-plus" : "gpt-4o-mini";
   const model = (await readLineRaw("③ 默认模型 (留空=" + modelDef + "): ")).trim() || modelDef;
 
-  let tested = false;
-  while (!tested) {
+  while (true) {
     if (!apiKey) {
       console.log("\n未拿到可用密钥（凭证来源为 env/.env 且该变量当前为空），跳过连通测试。");
       break;
@@ -257,7 +255,6 @@ async function onbread() {
     const r = await testConn(baseUrl, apiKey, model);
     if (r.ok) {
       console.log("✅ 连通成功！可以正常调用模型。");
-      tested = true;
       break;
     }
     console.log("❌ 连通失败: " + (r.message || "HTTP " + (r.status || "")));
@@ -279,7 +276,7 @@ async function onbread() {
     try {
       const d = JSON.parse(fs.readFileSync(providersPath, "utf8"));
       list = Array.isArray(d) ? d : d.providers || [];
-    } catch (e) {
+    } catch {
       console.warn("现有 providers.json 解析失败，将被覆盖。");
     }
   }

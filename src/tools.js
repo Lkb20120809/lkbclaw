@@ -1,9 +1,7 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { exec, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { config } from "./config.js";
 
 const execAsync = promisify(exec);
 

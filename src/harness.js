@@ -2,7 +2,6 @@ import { config } from "./config.js";
 import { countMessageTokens, truncateTokens } from "./tokens.js";
 
 const MAX_MSG_TOKENS = 5000;
-const MAX_PROMPT_CHARS = 600000;
 const MAX_TOOL_RESULT_TOKENS = 2000;
 
 export async function pruneMessages(messages, opts = {}) {
@@ -186,7 +185,7 @@ export async function* runHarness(
     if (toolCalls && toolCalls.length > 0) {
       const results = [];
       for (const tc of toolCalls) {
-        let args = {};
+        let args;
         try {
           args = JSON.parse(tc.function.arguments || "{}");
         } catch {

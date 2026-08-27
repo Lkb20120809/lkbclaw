@@ -1,6 +1,6 @@
 {
   "name": "lkbclaw",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "lkbclaw - 一个接入 Agnes API 的 AI 开发助手（终端对话 + 本地网关 + 联网搜索）。",
   "type": "module",
   "bin": {
@@ -22,5 +22,9 @@
   "dependencies": {
     "cli-highlight": "^2.1.11",
     "tiktoken": "^1.0.22"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.34.0",
+    "eslint": "^9.34.0"
   }
 }

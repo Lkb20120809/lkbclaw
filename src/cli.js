@@ -65,7 +65,6 @@ let suggestAt = -1;
 
 let sidebarVisible = false;
 let layoutMode = "default";
-let toastText = "";
 let toastTimer = null;
 
 const COMMANDS = [
@@ -379,12 +378,10 @@ function renderSidebar() {
 
 function showToast(msg) {
   if (!toastBox) return;
-  toastText = msg;
   toastBox.setContent(C.warn + " " + msg + C.reset);
   toastBox.show();
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
-    toastText = "";
     toastBox.hide();
     screen.render();
   }, 2600);

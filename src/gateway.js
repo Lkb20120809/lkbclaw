@@ -16,10 +16,6 @@ try {
   if (pj && pj.version) PKG_VERSION = pj.version;
 } catch {}
 
-function getVersion() {
-  return PKG_VERSION;
-}
-
 const SESSIONS_FILE = path.resolve(__dirname, "..", ".lkb-sessions.json");
 let sessionsCache = null;
 function loadSessions() {
