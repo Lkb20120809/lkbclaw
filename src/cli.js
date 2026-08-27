@@ -217,7 +217,7 @@ function buildTurnLines(turn, w) {
     }
     out.push("");
   } else {
-    out.push(C.tool + "▍ Claude" + C.reset);
+    out.push(C.tool + "▍ " + config.model + C.reset);
     if (turn.reasoning && turn.reasoning.trim()) {
       out.push(...wrapTagged("💭 " + turn.reasoning.trim().slice(0, 1200), w - 2, "  ", C.dim, C.reset));
     }
