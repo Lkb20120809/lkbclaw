@@ -933,7 +933,10 @@ export async function main() {
   });
 
   screen.on("keypress", onKey);
-  screen.on("render", positionCursor);
+  screen.on("render", () => {
+    positionCursor();
+    pinCursor();
+  });
   screen.on("resize", () => {
     refreshLayout();
     renderConv();
