@@ -147,7 +147,7 @@ function refreshLayout() {
   const maxW = Math.min(screen.width - 4, 110);
   convWidth = Math.max(40, maxW);
   colLeft = Math.max(1, Math.floor((screen.width - convWidth) / 2) - 3);
-  convHeight = Math.max(5, screen.height - 7);
+  convHeight = Math.max(5, screen.height - 6);
   if (headerBox) {
     headerBox.position.left = colLeft;
     headerBox.width = convWidth;
@@ -844,7 +844,7 @@ export async function main() {
   statusBox = blessed.box({
     parent: screen,
     left: colLeft,
-    bottom: 3,
+    bottom: 4,
     width: convWidth,
     height: 1,
     tags: true,
