@@ -141,6 +141,12 @@ export function feed(screen, str) {
       emit(undefined, { name: "tab" });
       continue;
     }
+    const code = p.charCodeAt(0);
+    if (code >= 1 && code <= 26 && code !== 9 && code !== 10 && code !== 13) {
+      screen._pending = p.slice(1);
+      emit(undefined, { name: String.fromCharCode(code + 0x60), ctrl: true });
+      continue;
+    }
     if (c0 === "\x1b") {
       const r = mapEscape(p);
       if (r) {

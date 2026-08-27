@@ -60,7 +60,22 @@ let suggestSel = 0;
 let suggestActive = false;
 let suggestAt = -1;
 
-let screen, convBox, inputBox, headerBox, statusBox, suggestBox;
+let sidebarVisible = false;
+let paletteActive = false;
+let paletteFilter = "";
+let paletteSel = 0;
+let paletteItems = [];
+let toastText = "";
+let toastTimer = null;
+
+const COMMANDS = [
+  "/help", "/tools", "/clear", "/save", "/load", "/history",
+  "/model", "/provider", "/mode plan", "/mode build",
+  "/todo add", "/todo done", "/todo rm", "/todo list", "/todo clear",
+  "/usage", "/download", "/quit",
+];
+
+let screen, convBox, inputBox, headerBox, statusBox, suggestBox, sidebarBox, paletteBox, toastBox;
 let convLines = [];
 let convWidth = 80;
 let convHeight = 20;
@@ -150,9 +165,11 @@ function addTurn(userText) {
 }
 
 function refreshLayout() {
-  const maxW = Math.min(screen.width - 4, 110);
+  const sidebarW = 30;
+  const reserved = sidebarVisible ? sidebarW + 2 : 0;
+  const maxW = Math.min(screen.width - 4 - reserved, 110);
   convWidth = Math.max(40, maxW);
-  colLeft = Math.max(1, Math.floor((screen.width - convWidth) / 2) - 3);
+  colLeft = Math.max(1, Math.floor((screen.width - reserved - convWidth) / 2) - 3);
   convHeight = Math.max(5, screen.height - 7);
   if (headerBox) {
     headerBox.position.left = colLeft;
@@ -171,6 +188,26 @@ function refreshLayout() {
   if (inputBox) {
     inputBox.position.left = colLeft;
     inputBox.width = convWidth;
+  }
+  if (sidebarBox) {
+    sidebarBox.position.left = screen.width - sidebarW - 1;
+    sidebarBox.position.top = 2;
+    sidebarBox.width = sidebarW;
+    sidebarBox.height = screen.height - 5;
+  }
+  if (paletteBox) {
+    const w = Math.min(64, convWidth);
+    paletteBox.position.left = colLeft + Math.floor((convWidth - w) / 2);
+    paletteBox.position.top = Math.max(2, Math.floor((screen.height - 14) / 2));
+    paletteBox.width = w;
+    paletteBox.height = 14;
+  }
+  if (toastBox) {
+    const w = Math.min(44, convWidth);
+    toastBox.position.left = colLeft + convWidth - w;
+    toastBox.position.top = 0;
+    toastBox.width = w;
+    toastBox.height = 2;
   }
   if (suggestBox) {
     suggestBox.position.left = colLeft;
@@ -322,6 +359,55 @@ function setStatusNote(n) {
   screen.render();
 }
 
+/* ============ 侧边栏 / 命令面板 / Toast ============ */
+function renderSidebar() {
+  if (!sidebarBox) return;
+  if (!sidebarVisible) {
+    sidebarBox.hide();
+    return;
+  }
+  const lines = [];
+  lines.push(C.head + "▍ 侧边栏" + C.reset);
+  lines.push(C.dim + "会话: " + turns.filter((t) => t.role === "user").length + " 轮 · 模式 " + mode + C.reset);
+  lines.push("");
+  lines.push(C.tool + "▍ 项目文件" + C.reset);
+  const files = getFileIndex().slice(0, 200);
+  for (const f of files) {
+    lines.push("  " + C.dim + f.replace(process.cwd(), ".") + C.reset);
+  }
+  if (files.length > 200) lines.push(C.dim + "  …(" + files.length + " 个)" + C.reset);
+  sidebarBox.setContent(lines.join("\n"));
+  sidebarBox.show();
+}
+
+function renderPalette() {
+  if (!paletteBox) return;
+  if (!paletteActive) {
+    paletteBox.hide();
+    return;
+  }
+  const q = paletteFilter.toLowerCase();
+  paletteItems = COMMANDS.filter((c) => c.toLowerCase().includes(q));
+  if (paletteSel >= paletteItems.length) paletteSel = Math.max(0, paletteItems.length - 1);
+  paletteBox.clearItems();
+  for (const c of paletteItems) paletteBox.addItem(c);
+  paletteBox.select(paletteSel);
+  paletteBox.show();
+}
+
+function showToast(msg) {
+  if (!toastBox) return;
+  toastText = msg;
+  toastBox.setContent(C.warn + " " + msg + C.reset);
+  toastBox.show();
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastText = "";
+    toastBox.hide();
+    screen.render();
+  }, 2600);
+}
+
 /* ============ 文件 @ 补全 ============ */
 function safeResolve(p) {
   const base = process.cwd();
@@ -360,21 +446,30 @@ function getFileIndex() {
 function computeSuggestions() {
   const before = inputBuffer.slice(0, cursor);
   const at = before.lastIndexOf("@");
-  if (at === -1) {
-    suggestActive = false;
+  if (at !== -1) {
+    const afterAt = before.slice(at + 1);
+    if (/\s/.test(afterAt)) {
+      suggestActive = false;
+      return;
+    }
+    const q = afterAt.toLowerCase();
+    const idx = getFileIndex().filter((f) => f.toLowerCase().includes(q)).slice(0, 60);
+    suggestions = idx;
+    suggestAt = at;
+    suggestSel = 0;
+    suggestActive = suggestions.length > 0;
     return;
   }
-  const afterAt = before.slice(at + 1);
-  if (/\s/.test(afterAt)) {
-    suggestActive = false;
+  if (before.startsWith("/") && !/\s/.test(before.slice(1))) {
+    const q = before.slice(1).toLowerCase();
+    const idx = COMMANDS.filter((c) => c.toLowerCase().includes(q)).slice(0, 60);
+    suggestions = idx;
+    suggestAt = 0;
+    suggestSel = 0;
+    suggestActive = suggestions.length > 0;
     return;
   }
-  const q = afterAt.toLowerCase();
-  const idx = getFileIndex().filter((f) => f.toLowerCase().includes(q)).slice(0, 60);
-  suggestions = idx;
-  suggestAt = at;
-  suggestSel = 0;
-  suggestActive = suggestions.length > 0;
+  suggestActive = false;
 }
 function renderSuggest() {
   if (!suggestActive) {
@@ -391,8 +486,13 @@ function acceptSuggestion() {
   const pick = suggestions[suggestSel];
   const head = inputBuffer.slice(0, suggestAt);
   const tail = inputBuffer.slice(cursor);
-  inputBuffer = head + "@" + pick + " " + tail;
-  cursor = head.length + pick.length + 2;
+  if (pick.startsWith("/")) {
+    inputBuffer = head + pick + " " + tail;
+    cursor = head.length + pick.length + 1;
+  } else {
+    inputBuffer = head + "@" + pick + " " + tail;
+    cursor = head.length + pick.length + 2;
+  }
   suggestActive = false;
   suggestBox.hide();
   renderInput();
@@ -752,12 +852,87 @@ function quit() {
 }
 
 function onKey(ch, key) {
+  if (paletteActive) {
+    if (!key) {
+      if (ch && ch >= " ") {
+        paletteFilter += ch;
+        paletteSel = 0;
+        renderPalette();
+        screen.render();
+      }
+      return;
+    }
+    const pk = key.name;
+    if (pk === "escape") {
+      paletteActive = false;
+      renderPalette();
+      screen.render();
+      return;
+    }
+    if (pk === "backspace") {
+      paletteFilter = paletteFilter.slice(0, -1);
+      paletteSel = 0;
+      renderPalette();
+      screen.render();
+      return;
+    }
+    if (pk === "up") {
+      paletteSel = Math.max(0, paletteSel - 1);
+      renderPalette();
+      screen.render();
+      return;
+    }
+    if (pk === "down") {
+      paletteSel = Math.min(Math.max(paletteItems.length - 1, 0), paletteSel + 1);
+      renderPalette();
+      screen.render();
+      return;
+    }
+    if (pk === "enter") {
+      const pick = paletteItems[paletteSel];
+      paletteActive = false;
+      if (pick) {
+        inputBuffer = pick + " ";
+        cursor = inputBuffer.length;
+        computeSuggestions();
+        renderSuggest();
+      }
+      renderPalette();
+      renderInput();
+      screen.render();
+      return;
+    }
+    if (pk === "tab" || pk === "left" || pk === "right" || pk === "home" || pk === "end" || pk === "delete") return;
+    return;
+  }
+
   if (!key) {
     if (ch) insertChar(ch);
     return;
   }
   const k = key.name;
   const shift = key.shift;
+
+  if (k === "p" && key.ctrl) {
+    paletteActive = true;
+    paletteFilter = "";
+    paletteSel = 0;
+    renderPalette();
+    screen.render();
+    return;
+  }
+  if (k === "b" && key.ctrl) {
+    sidebarVisible = !sidebarVisible;
+    refreshLayout();
+    renderConv();
+    renderHeader();
+    renderStatus();
+    renderInput();
+    renderSidebar();
+    screen.render();
+    showToast(sidebarVisible ? "侧边栏 开 (Ctrl-B)" : "侧边栏 关 (Ctrl-B)");
+    return;
+  }
 
   if (shift && k === "tab") {
     setMode(mode === "plan" ? "build" : "plan");
@@ -942,6 +1117,46 @@ export async function main() {
       selected: { bg: "cyan", fg: "black" },
       item: { fg: "white" },
     },
+  });
+
+  sidebarBox = blessed.box({
+    parent: screen,
+    left: 0,
+    top: 2,
+    width: 30,
+    height: 10,
+    tags: true,
+    hidden: true,
+    border: { type: "round" },
+    label: " 侧边栏 ",
+    style: { border: { fg: "cyan" } },
+  });
+
+  paletteBox = blessed.list({
+    parent: screen,
+    left: 0,
+    top: 2,
+    width: 64,
+    height: 14,
+    tags: false,
+    hidden: true,
+    border: { type: "round" },
+    label: " 命令面板 (Ctrl-P) ",
+    style: {
+      border: { fg: "cyan" },
+      selected: { bg: "cyan", fg: "black" },
+      item: { fg: "white" },
+    },
+  });
+
+  toastBox = blessed.box({
+    parent: screen,
+    left: 0,
+    top: 0,
+    width: 44,
+    height: 2,
+    tags: true,
+    hidden: true,
   });
 
   screen.on("keypress", onKey);
