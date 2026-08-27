@@ -310,6 +310,7 @@ function makeBox(opts, type) {
     },
     on() {},
   };
+  if (opts.parent && Array.isArray(opts.parent._boxes)) opts.parent._boxes.push(b);
   return b;
 }
 

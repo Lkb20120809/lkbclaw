@@ -7,6 +7,7 @@ import {
   mapEscape,
   feed,
 } from "../src/tui.js";
+import blessed from "../src/tui.js";
 
 test("wcwidth: 中文宽字符占 2 列", () => {
   assert.equal(wcwidth("a"), 1);
@@ -64,4 +65,12 @@ test("feed: 中文在 raw 模式下正确按码点拆分", () => {
   assert.equal(events.length, 2);
   assert.deepEqual(events[0], { ch: "中", key: undefined });
   assert.deepEqual(events[1], { ch: "文", key: undefined });
+});
+
+test("box 创建后会挂到父 screen 的 _boxes（draw 才会绘制）", () => {
+  const scr = blessed.screen();
+  const bx = blessed.box({ parent: scr, top: 0, left: 0, width: 10, height: 1 });
+  assert.ok(scr._boxes.includes(bx), "box 必须加入 screen._boxes");
+  bx.setContent("hi");
+  assert.equal(bx.getContent(), "hi");
 });
