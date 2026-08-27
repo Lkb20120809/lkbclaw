@@ -6,3 +6,5 @@ node_modules/
 *.tgz
 .lkb-uploads/
 providers.json
+npm_password.txt
+

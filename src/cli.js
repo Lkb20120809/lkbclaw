@@ -291,11 +291,17 @@ function positionCursor() {
     const lines = ("❯ " + before).split("\n");
     const row = lines.length - 1;
     const col = lines[row].length;
-    const absX = colLeft + col;
-    const absY = screen.height - 3 + row;
+    const absX = clamp(colLeft + col, 0, screen.width - 1);
+    const absY = clamp(screen.height - 3 + row, 0, screen.height - 1);
     screen.program.cursorPos(absX, absY);
     screen.program.showCursor();
   } catch {}
+}
+
+let _cursorPin = null;
+function pinCursor() {
+  if (_cursorPin) clearTimeout(_cursorPin);
+  _cursorPin = setTimeout(positionCursor, 0);
 }
 
 function setStatusNote(n) {
@@ -388,11 +394,11 @@ function moveSuggest(d) {
   screen.render();
 }
 function expandAtFiles(text) {
-  const re = /@([^\s]+)/g;
+  const re = /(^|\s)@([^\s]+)/g;
   let m;
   const appended = [];
   while ((m = re.exec(text))) {
-    const full = safeResolve(m[1]);
+    const full = safeResolve(m[2]);
     if (!full) continue;
     try {
       if (!fs.statSync(full).isFile()) continue;
@@ -681,18 +687,13 @@ async function doSend() {
       onText(chunk);
     }
   } catch (e) {
-    if (e && e.name === "AbortError") {
+    const aborted = e && (e.name === "AbortError" || e.message === "timeout");
+    if (aborted) {
       turn.assistant += "\n\n" + C.warn + (e.message === "timeout" ? "[请求超时：模型接口未在 120s 内返回]" : "[已中断]") + C.reset;
     } else turn.assistant += "\n\n" + C.err + "[错误] " + (e && e.message ? e.message : e) + C.reset;
   } finally {
     clearTimeout(reqTimer);
   }
-  let finalContent = assistantTurn.assistant.trim();
-  if (!finalContent) {
-    const last = [...messages].reverse().find((m) => m.role === "assistant" && m.content);
-    if (last) finalContent = last.content;
-  }
-  if (finalContent) messages.push({ role: "assistant", content: finalContent });
   busy = false;
   stopSpin();
   statusNote = "";

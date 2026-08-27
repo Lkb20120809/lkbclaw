@@ -95,12 +95,14 @@ function createOpenAIProvider(cfg) {
       const body = {
         model: model || cfg.model,
         messages,
-        tools,
-        tool_choice: "auto",
         stream,
         stream_options: { include_usage: true },
         temperature,
       };
+      if (tools && tools.length) {
+        body.tools = tools;
+        body.tool_choice = "auto";
+      }
       const res = await fetch(url, {
         method: "POST",
         headers: {

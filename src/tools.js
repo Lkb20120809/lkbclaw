@@ -179,7 +179,7 @@ async function git({ operation, args = "" }) {
     return { error: "git reset --hard is blocked for safety" };
   }
   const parts = ["git", operation];
-  if (args.trim()) parts.push(...args.trim().split(/\s+/));
+  if (args.trim()) parts.push(args.trim());
   const child = spawn(parts[0], parts.slice(1), { shell: true });
   let stdout = "", stderr = "";
   child.stdout.on("data", (d) => (stdout += d));
