@@ -45,9 +45,15 @@ const turns = [];
 let sessionTokens = 0;
 let lastUsage = null;
 const todos = [];
-let inputBuffer = "";
-let cursor = 0;
 let viewTop = 0;
+
+const getVal = () => (inputBox ? inputBox.value || "" : "");
+const getCur = () => (inputBox ? inputBox.cursor || 0 : 0);
+function setVal(v, c) {
+  if (!inputBox) return;
+  inputBox.value = v;
+  inputBox.cursor = c == null ? v.length : Math.max(0, Math.min(c, v.length));
+}
 let busy = false;
 let pinBottom = true;
 let spinnerIdx = 0;
@@ -60,7 +66,7 @@ let suggestSel = 0;
 let suggestActive = false;
 let suggestAt = -1;
 
-let screen, convBox, inputBox, headerBox, statusBox, suggestBox;
+let screen, convBox, inputBox, promptBox, headerBox, statusBox, suggestBox;
 let convLines = [];
 let convWidth = 80;
 let convHeight = 20;
@@ -157,8 +163,16 @@ function refreshLayout() {
     statusBox.width = convWidth;
   }
   if (inputBox) {
-    inputBox.position.left = colLeft;
-    inputBox.width = convWidth;
+    inputBox.position.left = colLeft + 2;
+    inputBox.position.bottom = 0;
+    inputBox.width = Math.max(10, convWidth - 2);
+    inputBox.height = 3;
+  }
+  if (promptBox) {
+    promptBox.position.left = colLeft;
+    promptBox.position.bottom = 2;
+    promptBox.width = 2;
+    promptBox.height = 1;
   }
   if (suggestBox) {
     suggestBox.position.left = colLeft;
@@ -279,29 +293,7 @@ function renderStatus() {
 }
 
 function renderInput() {
-  const prompt = C.brand + "❯ " + C.reset;
-  const disp = escapeBlessed(inputBuffer).replace(/\n/g, "\n  ");
-  const hint = C.dim + "  Enter 发送 · Shift+Enter 换行 · ! shell · / 命令 · # 记忆 · Ctrl-C 中断(双按退出)" + C.reset;
-  inputBox.setContent(prompt + disp + "\n" + hint);
-}
-
-function positionCursor() {
-  try {
-    const before = inputBuffer.slice(0, cursor);
-    const lines = ("❯ " + before).split("\n");
-    const row = lines.length - 1;
-    const col = lines[row].length;
-    const absX = clamp(colLeft + col, 0, screen.width - 1);
-    const absY = clamp(screen.height - 3 + row, 0, screen.height - 1);
-    screen.program.cursorPos(absX, absY);
-    screen.program.showCursor();
-  } catch {}
-}
-
-let _cursorPin = null;
-function pinCursor() {
-  if (_cursorPin) clearTimeout(_cursorPin);
-  _cursorPin = setTimeout(positionCursor, 0);
+  screen.render();
 }
 
 function setStatusNote(n) {
@@ -346,7 +338,7 @@ function getFileIndex() {
   return out;
 }
 function computeSuggestions() {
-  const before = inputBuffer.slice(0, cursor);
+  const before = getVal().slice(0, getCur());
   const at = before.lastIndexOf("@");
   if (at === -1) {
     suggestActive = false;
@@ -377,13 +369,14 @@ function renderSuggest() {
 function acceptSuggestion() {
   if (!suggestActive || !suggestions[suggestSel]) return;
   const pick = suggestions[suggestSel];
-  const head = inputBuffer.slice(0, suggestAt);
-  const tail = inputBuffer.slice(cursor);
-  inputBuffer = head + "@" + pick + " " + tail;
-  cursor = head.length + pick.length + 2;
+  const v = getVal();
+  const c = getCur();
+  const head = v.slice(0, suggestAt);
+  const tail = v.slice(c);
+  const nv = head + "@" + pick + " " + tail;
+  setVal(nv, head.length + pick.length + 2);
   suggestActive = false;
   suggestBox.hide();
-  renderInput();
   screen.render();
 }
 function moveSuggest(d) {
@@ -618,10 +611,8 @@ function stopSpin() {
 }
 
 async function doSend() {
-  const text = inputBuffer;
-  inputBuffer = "";
-  cursor = 0;
-  renderInput();
+  const text = getVal();
+  setVal("", 0);
   if (!text.trim()) return;
 
   if (text.startsWith("/")) {
@@ -709,43 +700,15 @@ function scrollConv(d) {
   screen.render();
 }
 
-function insertChar(ch) {
-  inputBuffer = inputBuffer.slice(0, cursor) + ch + inputBuffer.slice(cursor);
-  cursor++;
-  renderInput();
-  computeSuggestions();
-  renderSuggest();
-  screen.render();
-}
-function deleteChar() {
-  if (cursor === 0) return;
-  inputBuffer = inputBuffer.slice(0, cursor - 1) + inputBuffer.slice(cursor);
-  cursor--;
-  renderInput();
-  computeSuggestions();
-  renderSuggest();
-  screen.render();
-}
-function deleteForward() {
-  if (cursor >= inputBuffer.length) return;
-  inputBuffer = inputBuffer.slice(0, cursor) + inputBuffer.slice(cursor + 1);
-  renderInput();
-  computeSuggestions();
-  renderSuggest();
-  screen.render();
-}
 function quit() {
   if (screen) screen.destroy();
   process.exit(0);
 }
 
 function onKey(ch, key) {
-  if (!key) {
-    if (ch) insertChar(ch);
-    return;
-  }
-  const k = key.name;
-  const shift = key.shift;
+  const k = key ? key.name : null;
+  const shift = key ? key.shift : false;
+  const ctrl = key ? key.ctrl : false;
 
   if (shift && k === "tab") {
     setMode(mode === "plan" ? "build" : "plan");
@@ -755,6 +718,7 @@ function onKey(ch, key) {
     showToolDetails = !showToolDetails;
     setStatusNote(showToolDetails ? "工具详情: 展开" : "工具详情: 折叠");
     setTimeout(() => setStatusNote(""), 1200);
+    setVal(getVal().split("\t").join(""));
     renderConv();
     screen.render();
     return;
@@ -779,90 +743,68 @@ function onKey(ch, key) {
       screen.render();
       return;
     }
-  } else {
-    if (k === "enter") {
-      if (shift) insertChar("\n");
-      else if (!busy) doSend();
-      return;
-    }
-    if (k === "up") {
-      scrollConv(-Math.max(1, Math.floor(convHeight / 2)));
-      return;
-    }
-    if (k === "down") {
-      scrollConv(Math.max(1, Math.floor(convHeight / 2)));
-      return;
-    }
-    if (k === "pageup") {
-      scrollConv(-convHeight + 2);
-      return;
-    }
-    if (k === "pagedown") {
-      scrollConv(convHeight - 2);
-      return;
-    }
-    if (k === "c" && key.ctrl) {
-      if (busy) {
-        if (abortCtrl) abortCtrl.abort();
-        setStatusNote("正在中断…");
-      } else {
-        const now = Date.now();
-        if (now - lastCtrlC < 800) quit();
-        else {
-          lastCtrlC = now;
-          setStatusNote("再按一次 Ctrl-C 退出");
-          setTimeout(() => {
-            if (Date.now() - lastCtrlC >= 800) setStatusNote("");
-          }, 900);
-        }
-      }
-      return;
-    }
   }
 
-  if (k === "backspace") {
-    deleteChar();
+  if (k === "enter") {
+    if (shift) return; // 原生 textarea 插入换行
+    if (!busy) {
+      setVal(getVal().replace(/\n$/, "")); // 去掉 textarea 刚插入的换行
+      doSend();
+    }
     return;
   }
-  if (k === "delete") {
-    deleteForward();
+  if (k === "up") {
+    scrollConv(-Math.max(1, Math.floor(convHeight / 2)));
     return;
   }
-  if (k === "left") {
-    if (cursor > 0) cursor--;
-    renderInput();
-    screen.render();
+  if (k === "down") {
+    scrollConv(Math.max(1, Math.floor(convHeight / 2)));
     return;
   }
-  if (k === "right") {
-    if (cursor < inputBuffer.length) cursor++;
-    renderInput();
-    screen.render();
+  if (k === "pageup") {
+    scrollConv(-convHeight + 2);
     return;
   }
-  if (k === "home") {
-    cursor = 0;
-    renderInput();
-    screen.render();
+  if (k === "pagedown") {
+    scrollConv(convHeight - 2);
     return;
   }
-  if (k === "end") {
-    cursor = inputBuffer.length;
-    renderInput();
-    screen.render();
+  if (k === "c" && ctrl) {
+    if (busy) {
+      if (abortCtrl) abortCtrl.abort();
+      setStatusNote("正在中断…");
+    } else {
+      const now = Date.now();
+      if (now - lastCtrlC < 800) quit();
+      else {
+        lastCtrlC = now;
+        setStatusNote("再按一次 Ctrl-C 退出");
+        setTimeout(() => {
+          if (Date.now() - lastCtrlC >= 800) setStatusNote("");
+        }, 900);
+      }
+    }
     return;
   }
   if (k === "escape") {
-    inputBuffer = "";
-    cursor = 0;
+    setVal("", 0);
     suggestActive = false;
     suggestBox.hide();
-    renderInput();
     screen.render();
     return;
   }
-  if (ch && !key.ctrl && !key.meta && k !== "tab") {
-    insertChar(ch);
+
+  // 其余按键（可打印字符、backspace、方向键、home/end、delete）交给聚焦的
+  // textbox 原生处理；其内置编辑监听先于本函数执行，故此处 value/cursor 已是最新。
+  if (
+    k === "backspace" || k === "delete" || k === "left" ||
+    k === "right" || k === "home" || k === "end" ||
+    (ch && !ctrl && !key.meta && k !== "tab")
+  ) {
+    computeSuggestions();
+    renderSuggest();
+    screen.render();
+    return;
   }
 }
 
@@ -885,6 +827,7 @@ export async function main() {
     width: convWidth,
     height: 1,
     tags: true,
+    keyable: false,
   });
 
   convBox = blessed.box({
@@ -895,6 +838,7 @@ export async function main() {
     height: convHeight,
     tags: true,
     scrollable: false,
+    keyable: false,
   });
 
   statusBox = blessed.box({
@@ -904,16 +848,31 @@ export async function main() {
     width: convWidth,
     height: 1,
     tags: true,
+    keyable: false,
   });
 
-  inputBox = blessed.box({
+  inputBox = blessed.textarea({
+    parent: screen,
+    left: colLeft + 2,
+    bottom: 0,
+    width: Math.max(10, convWidth - 2),
+    height: 3,
+    tags: false,
+    inputOnClick: false,
+    mouse: false,
+    style: { fg: "white" },
+  });
+  promptBox = blessed.box({
     parent: screen,
     left: colLeft,
-    bottom: 0,
-    width: convWidth,
-    height: 3,
+    bottom: 2,
+    width: 2,
+    height: 1,
     tags: true,
+    keyable: false,
+    content: C.brand + "❯" + C.reset,
   });
+  inputBox.focus();
 
   suggestBox = blessed.list({
     parent: screen,
@@ -923,6 +882,7 @@ export async function main() {
     height: 8,
     tags: false,
     hidden: true,
+    keyable: false,
     border: { type: "round" },
     label: " 文件 ",
     style: {
@@ -933,30 +893,23 @@ export async function main() {
   });
 
   screen.on("keypress", onKey);
-  screen.on("render", () => {
-    positionCursor();
-    pinCursor();
-  });
   screen.on("resize", () => {
     refreshLayout();
     renderConv();
     renderHeader();
     renderStatus();
-    renderInput();
     screen.render();
   });
 
   renderConv();
   renderHeader();
   renderStatus();
-  renderInput();
   screen.render();
 
   const rawArgs = process.argv.slice(2).filter((a) => !a.startsWith("-") && !a.startsWith("--"));
   const argPrompt = rawArgs.join(" ").trim();
   if (argPrompt && !argPrompt.startsWith("/")) {
-    inputBuffer = argPrompt;
-    cursor = argPrompt.length;
+    setVal(argPrompt, argPrompt.length);
     await doSend();
     process.exit(0);
   }
