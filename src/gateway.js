@@ -88,6 +88,9 @@ async function handleChat(req, res) {
     return sendJSON(res, 400, { error: "missing 'message' or 'messages'" });
   }
   const model = body.model;
+  console.log(
+    `\x1b[35m[chat]\x1b[0m model=${model || config.model} msgs=${messages.length}`
+  );
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -111,6 +114,7 @@ async function handleChat(req, res) {
     }
     res.write("data: [DONE]\n\n");
   } catch (e) {
+    console.error(`\x1b[31m[chat] 出错: ${e.stack || e.message}\x1b[0m`);
     res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
     res.write("data: [DONE]\n\n");
   }
@@ -119,6 +123,9 @@ async function handleChat(req, res) {
 
 async function handleProxy(req, res) {
   const body = await readBody(req);
+  console.log(
+    `\x1b[34m[proxy]\x1b[0m ${config.apiBase}/v1/chat/completions stream=${!!body.stream}`
+  );
   const upstream = await fetch(`${config.apiBase}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -168,6 +175,15 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
   }
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost`);
+    const reqStart = Date.now();
+    res.on("finish", () => {
+      const ms = Date.now() - reqStart;
+      const status = res.statusCode;
+      const color = status >= 500 ? "\x1b[31m" : status >= 400 ? "\x1b[33m" : "\x1b[36m";
+      console.log(
+        `\x1b[2m${new Date().toISOString()}\x1b[0m ${color}${req.method} ${url.pathname}\x1b[0m -> ${status} (${ms}ms)`
+      );
+    });
 
     const token = config.gatewayToken;
     const authHeader = req.headers["authorization"] || "";
@@ -292,6 +308,9 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       }
       return sendJSON(res, 404, { error: "not found" });
     } catch (e) {
+      console.error(
+        `\x1b[31m请求处理出错 ${req.method} ${url.pathname}: ${e.stack || e.message}\x1b[0m`
+      );
       if (!res.headersSent) sendJSON(res, 500, { error: e.message });
       else res.end();
     }
