@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import blessed from "blessed";
+import blessed, { displayWidth, wcwidth as charWidth } from "./tui.js";
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -67,10 +67,13 @@ let convHeight = 20;
 let colLeft = 1;
 
 function escapeBlessed(s) {
-  return String(s).replace(/[{}]/g, (c) => (c === "{" ? "{{" : "}}"));
+  return String(s);
 }
 function stripTags(s) {
   return String(s).replace(/\{[^}]*\}/g, "");
+}
+function dispWidth(s) {
+  return displayWidth(stripTags(s));
 }
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
@@ -89,9 +92,18 @@ function wrapTagged(text, width, indent, open, close) {
       continue;
     }
     let line = raw;
-    while (stripTags(line).length > width) {
-      let cut = line.lastIndexOf(" ", width);
-      if (cut <= 0) cut = width;
+    while (dispWidth(line) > width) {
+      const chars = Array.from(line);
+      let cut = 0;
+      let w = 0;
+      for (let i = 0; i < chars.length; i++) {
+        const cw = charWidth(chars[i]);
+        if (w + cw > width) break;
+        w += cw;
+        cut = i + 1;
+      }
+      let sp = line.lastIndexOf(" ", cut);
+      if (sp > 0 && sp < cut) cut = sp;
       const seg = line.slice(0, cut);
       res.push(indent + open + escapeBlessed(seg) + close);
       line = line.slice(cut).replace(/^\s+/, "");
@@ -141,7 +153,7 @@ function refreshLayout() {
   const maxW = Math.min(screen.width - 4, 110);
   convWidth = Math.max(40, maxW);
   colLeft = Math.max(1, Math.floor((screen.width - convWidth) / 2) - 3);
-  convHeight = Math.max(5, screen.height - 6);
+  convHeight = Math.max(5, screen.height - 7);
   if (headerBox) {
     headerBox.position.left = colLeft;
     headerBox.width = convWidth;
@@ -259,7 +271,7 @@ function renderHeader() {
   const right =
     `${escapeBlessed(config.model)} · ${C.dim}${escapeBlessed(process.cwd())}${C.reset} · ⎇ ${escapeBlessed(gitBranch())}` +
     (mode === "plan" ? ` · ${C.warn}PLAN${C.reset}` : "");
-  const pad = Math.max(1, innerW - (stripTags(left).length + stripTags(right).length));
+  const pad = Math.max(1, innerW - (dispWidth(left) + dispWidth(right)));
   headerBox.setContent(left + " ".repeat(pad) + right);
 }
 
@@ -290,7 +302,7 @@ function positionCursor() {
     const before = inputBuffer.slice(0, cursor);
     const lines = ("❯ " + before).split("\n");
     const row = lines.length - 1;
-    const col = lines[row].length;
+    const col = displayWidth(lines[row]);
     const absX = clamp(colLeft + col, 0, screen.width - 1);
     const absY = clamp(screen.height - 3 + row, 0, screen.height - 1);
     screen.program.cursorPos(absX, absY);
