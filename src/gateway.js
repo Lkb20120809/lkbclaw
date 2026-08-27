@@ -88,8 +88,11 @@ async function handleChat(req, res) {
     return sendJSON(res, 400, { error: "missing 'message' or 'messages'" });
   }
   const model = body.model;
+  const rid = crypto.randomBytes(3).toString("hex");
+  const tag = `\x1b[35m[#${rid}]\x1b[0m`;
+  res.__logTag = tag;
   console.log(
-    `\x1b[35m[chat]\x1b[0m model=${model || config.model} msgs=${messages.length}`
+    `${tag} \x1b[35m[chat]\x1b[0m model=${model || config.model} msgs=${messages.length}`
   );
 
   res.writeHead(200, {
@@ -98,11 +101,19 @@ async function handleChat(req, res) {
     Connection: "keep-alive",
   });
 
+  const clip = (s, n = 160) => {
+    s = typeof s === "string" ? s : JSON.stringify(s);
+    return s.length > n ? s.slice(0, n) + "…" : s;
+  };
   const onTool = (name, args, result) => {
     res.write(`data: ${JSON.stringify({ type: "tool", name, args, result })}\n\n`);
+    console.log(
+      `${tag}   \x1b[33m→ 命令\x1b[0m ${name} ${clip(args)} => ${clip(result)}`
+    );
   };
   const onUsage = (u) => {
     res.write(`data: ${JSON.stringify({ type: "usage", usage: u })}\n\n`);
+    console.log(`${tag}   \x1b[2musage\x1b[0m ${clip(u)}`);
   };
   const onReasoning = (text) => {
     res.write(`data: ${JSON.stringify({ type: "reasoning", content: text })}\n\n`);
@@ -180,8 +191,9 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
       const ms = Date.now() - reqStart;
       const status = res.statusCode;
       const color = status >= 500 ? "\x1b[31m" : status >= 400 ? "\x1b[33m" : "\x1b[36m";
+      const tag = res.__logTag ? res.__logTag + " " : "";
       console.log(
-        `\x1b[2m${new Date().toISOString()}\x1b[0m ${color}${req.method} ${url.pathname}\x1b[0m -> ${status} (${ms}ms)`
+        `\x1b[2m${new Date().toISOString()}\x1b[0m ${tag}${color}${req.method} ${url.pathname}\x1b[0m -> ${status} (${ms}ms)`
       );
     });
 
