@@ -5,7 +5,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-let PKG_VERSION = "1.3.1";
+let PKG_VERSION = "1.3.2";
 try {
   const pj = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   if (pj && pj.version) PKG_VERSION = pj.version;
@@ -64,6 +64,7 @@ let lastUsage = null;
 const todos = [];
 let inputBuffer = "";
 let cursor = 0;
+let pendingPaste = "";
 let viewTop = 0;
 let busy = false;
 let pinBottom = true;
@@ -313,7 +314,6 @@ function refreshLayout() {
     inputBox.position.left = colLeft;
     inputBox.width = convWidth;
     inputBox.height = 4;
-    inputBox.border = { type: "round" };
   }
   if (sidebarBox) {
     sidebarBox.position.left = screen.width - sidebarW - 1;
@@ -460,18 +460,41 @@ function renderStatus() {
 
 function renderInput() {
   const prompt = C.brand + "❯ " + C.reset;
-  const disp = escapeBlessed(inputBuffer).replace(/\n/g, "\n  ");
-  inputBox.setContent(prompt + disp);
+  if (pendingPaste) {
+    const n = pendingPaste.split("\n").length;
+    const mark = C.warn + "paste #" + n + " 行 (已暂存，回车发送；Ctrl-K 清除)" + C.reset;
+    const note = inputBuffer ? "\n  " + escapeBlessed(inputBuffer) : "";
+    inputBox.setContent(mark + note);
+  } else {
+    const disp = escapeBlessed(inputBuffer).replace(/\n/g, "\n  ");
+    inputBox.setContent(prompt + disp);
+  }
+  positionCursor();
 }
 
 function positionCursor() {
   try {
+    if (!inputBox) return;
+    const border = inputBox.border ? 1 : 0;
+    const left = inputBox.position.left || 0;
+    const top =
+      inputBox.position.top != null
+        ? inputBox.position.top
+        : (screen.height - (inputBox.position.bottom || 0) - (inputBox.position.height || 1));
     const before = inputBuffer.slice(0, cursor);
-    const lines = ("❯ " + before).split("\n");
-    const row = lines.length - 1;
-    const col = displayWidth(lines[row]);
-    const absX = clamp(colLeft + col, 0, screen.width - 1);
-    const absY = clamp(screen.height - 3 + row, 0, screen.height - 1);
+    let row, col;
+    if (pendingPaste) {
+      const noteLines = ("  " + before).split("\n");
+      row = noteLines.length; // 第 0 行是 paste 标记，第 1 行起是备注
+      col = displayWidth(noteLines[noteLines.length - 1]);
+    } else {
+      const rawLines = before.split("\n");
+      const visLines = rawLines.map((l, i) => (i === 0 ? "❯ " : "  ") + l);
+      row = visLines.length - 1;
+      col = displayWidth(visLines[visLines.length - 1]);
+    }
+    const absX = clamp(left + border + col, 0, screen.width - 1);
+    const absY = clamp(top + border + row, 0, screen.height - 1);
     screen.program.cursorPos(absX, absY);
     screen.program.showCursor();
   } catch {}
@@ -1181,7 +1204,11 @@ function stopSpin() {
 }
 
 async function doSend() {
-  const text = inputBuffer;
+  let text = inputBuffer;
+  if (pendingPaste) {
+    text = pendingPaste + (text.trim() ? "\n\n" + text : "");
+    pendingPaste = "";
+  }
   inputBuffer = "";
   cursor = 0;
   renderInput();
@@ -1334,11 +1361,36 @@ function quit() {
   process.exit(0);
 }
 
+function handlePaste(text) {
+  if (!text) return;
+  pendingPaste += (pendingPaste ? "\n" : "") + text;
+  renderInput();
+  computeSuggestions();
+  renderSuggest();
+  screen.render();
+}
+
 function onKey(ch, key) {
   if (key && key.name === "mouse") {
     const step = Math.max(1, Math.floor((convHeight - 2) / 4));
     if (key.wheel === -1) scrollConv(-step);
     else if (key.wheel === 1) scrollConv(step);
+    return;
+  }
+
+  if (key && key.name === "paste") {
+    handlePaste(ch);
+    return;
+  }
+
+  if (key && key.name === "k" && key.ctrl) {
+    inputBuffer = "";
+    cursor = 0;
+    pendingPaste = "";
+    suggestActive = false;
+    suggestBox.hide();
+    renderInput();
+    screen.render();
     return;
   }
 
@@ -1487,6 +1539,7 @@ function onKey(ch, key) {
   if (k === "escape") {
     inputBuffer = "";
     cursor = 0;
+    pendingPaste = "";
     suggestActive = false;
     suggestBox.hide();
     renderInput();
