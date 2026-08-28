@@ -12,7 +12,7 @@ import { info as logInfo, error as logError } from "./logger.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_HTML = fs.readFileSync(path.join(__dirname, "ui.html"), "utf8");
 
-let PKG_VERSION = "0.0.0";
+let PKG_VERSION = "1.3.1";
 try {
   const pj = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
   if (pj && pj.version) PKG_VERSION = pj.version;
@@ -301,6 +301,28 @@ export async function startGateway(port = 8787, host = "127.0.0.1") {
           ".js": "application/javascript; charset=utf-8",
           ".css": "text/css; charset=utf-8",
           ".map": "application/json",
+        };
+        res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream" });
+        return res.end(fs.readFileSync(full));
+      }
+      if (req.method === "GET" && url.pathname.startsWith("/assets/")) {
+        const base = path.resolve(__dirname, "assets");
+        const full = path.resolve(base, url.pathname.slice("/assets/".length));
+        if (!full.startsWith(base + path.sep) || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
+          return sendJSON(res, 404, { error: "not found" });
+        }
+        const ext = path.extname(full);
+        const types = {
+          ".ico": "image/x-icon",
+          ".png": "image/png",
+          ".svg": "image/svg+xml",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".gif": "image/gif",
+          ".webp": "image/webp",
+          ".js": "application/javascript; charset=utf-8",
+          ".css": "text/css; charset=utf-8",
+          ".json": "application/json; charset=utf-8",
         };
         res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream" });
         return res.end(fs.readFileSync(full));

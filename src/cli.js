@@ -5,7 +5,7 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-let PKG_VERSION = "0.2.1";
+let PKG_VERSION = "1.3.1";
 try {
   const pj = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   if (pj && pj.version) PKG_VERSION = pj.version;
@@ -36,14 +36,16 @@ const C = {
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 const LOGO = [
-  "        __",
-  "   ____/ /___  ___  ___",
-  "  / __  / __ \\/ _ \\/ _ \\",
-  " / /_/ / /_/ /  __/  __/",
-  " \\__,_/\\____/\\___/\\___/   lkbclaw",
+  "\x1b[97m██     ██  ██    █████ \x1b[0m    \x1b[90m █████    ██       ███     ██    ██\x1b[0m",
+  "\x1b[97m██     ██ ██     ██  ██\x1b[0m    \x1b[90m██   █    ██      ██  █    ██    ██\x1b[0m",
+  "\x1b[97m██     ████      █████ \x1b[0m    \x1b[90m██       ██      ██████   ██ ██ ██\x1b[0m",
+  "\x1b[97m██     ██ ██     ██  ██\x1b[0m    \x1b[90m██       ██      ██  █    ███████ \x1b[0m",
+  "\x1b[97m██     ██  ██    ██  ██\x1b[0m    \x1b[90m██       ██      ██  █    ███  ███\x1b[0m",
+  "\x1b[97m██     ██  ██    █████ \x1b[0m    \x1b[90m █████    ██      ██  █    ██    ██\x1b[0m",
 ];
 
 const messages = [{ role: "system", content: SYSTEM_PROMPT }];
+let projectMemory = "";
 let currentSessionId = null;
 function deriveTitle() {
   const firstUser = messages.find((m) => m.role === "user");
@@ -75,7 +77,7 @@ let suggestSel = 0;
 let suggestActive = false;
 let suggestAt = -1;
 
-let sidebarVisible = false;
+let sidebarVisible = true;
 let layoutMode = "default";
 let toastTimer = null;
 
@@ -83,7 +85,7 @@ const COMMANDS = [
   "/help", "/tools", "/clear", "/compress", "/save", "/load", "/list", "/tools-detail", "/history",
   "/model", "/provider", "/mode plan", "/mode build",
   "/todo add", "/todo done", "/todo rm", "/todo list", "/todo clear",
-  "/usage", "/download", "/quit",
+  "/usage", "/download", "/diff", "/compare", "/init", "/grill-me", "/quit",
 ];
 
 let screen, convBox, inputBox, headerBox, statusBox, suggestBox, sidebarBox, toastBox;
@@ -107,6 +109,95 @@ function clamp(n, lo, hi) {
 function truncateStr(s, max) {
   if (typeof s !== "string") s = String(s);
   return s.length > max ? s.slice(0, max) + ` …[截断 ${s.length} 字]` : s;
+}
+
+function rpadNum(n, w) {
+  const s = String(n);
+  return s.length >= w ? s.slice(-w) : " ".repeat(w - s.length) + s;
+}
+function diffLines(a, b) {
+  const A = String(a).split("\n");
+  const B = String(b).split("\n");
+  const n = A.length, m = B.length;
+  if (n * m > 4000000) return null;
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { ops.push({ op: " ", text: A[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ op: "-", text: A[i] }); i++; }
+    else { ops.push({ op: "+", text: B[j] }); j++; }
+  }
+  while (i < n) { ops.push({ op: "-", text: A[i] }); i++; }
+  while (j < m) { ops.push({ op: "+", text: B[j] }); j++; }
+  return ops;
+}
+function formatUnified(ops, w) {
+  const ctx = 3;
+  let oN = 0, nN = 0;
+  const L = ops.map((d) => ({
+    op: d.op,
+    text: d.text,
+    o: d.op === "+" ? null : (oN += 1, oN),
+    n: d.op === "-" ? null : (nN += 1, nN),
+  }));
+  const out = [];
+  const N = L.length;
+  let i = 0;
+  while (i < N) {
+    while (i < N && L[i].op === " ") i++;
+    if (i >= N) break;
+    const hs = Math.max(0, i - ctx);
+    let je = i;
+    while (je < N && L[je].op !== " ") je++;
+    const he = Math.min(N, je + ctx);
+    let oldBase = 0, newBase = 0;
+    for (let k = 0; k < hs; k++) { if (L[k].op !== "+") oldBase++; if (L[k].op !== "-") newBase++; }
+    let oldCnt = 0, newCnt = 0;
+    for (let k = hs; k < he; k++) { if (L[k].op !== "+") oldCnt++; if (L[k].op !== "-") newCnt++; }
+    out.push(C.dim + `@@ -${oldBase + 1},${oldCnt} +${newBase + 1},${newCnt} @@` + C.reset);
+    for (let k = hs; k < he; k++) {
+      const d = L[k];
+      const t = truncateStr(d.text, w - 4);
+      if (d.op === " ") out.push(" " + t);
+      else if (d.op === "-") out.push(C.del + "-" + t + C.reset);
+      else out.push(C.add + "+" + t + C.reset);
+    }
+    i = he;
+  }
+  return out;
+}
+function formatSideBySide(ops, w) {
+  const avail = Math.max(16, w - 2);
+  const numW = 4;
+  const sep = " │ ";
+  const colW = Math.max(4, Math.floor((avail - numW * 2 - sep.length * 3) / 2));
+  const rows = [];
+  let o = 0, n = 0;
+  for (const d of ops) {
+    if (d.op === " ") {
+      rows.push(rpadNum(o + 1, numW) + " │ " + truncateStr(d.text, colW) + sep + rpadNum(n + 1, numW) + " │ " + truncateStr(d.text, colW));
+      o++; n++;
+    } else if (d.op === "-") {
+      rows.push(C.del + rpadNum(o + 1, numW) + " │ " + truncateStr(d.text, colW) + sep + "    │ " + " ".repeat(colW) + C.reset);
+      o++;
+    } else {
+      rows.push("    │ " + " ".repeat(colW) + sep + C.add + rpadNum(n + 1, numW) + " │ " + truncateStr(d.text, colW) + C.reset);
+      n++;
+    }
+  }
+  return rows;
+}
+function colorGitDiff(s) {
+  return String(s).split("\n").map((l) =>
+    l.startsWith("@@") ? C.dim + l + C.reset
+      : l.startsWith("+") ? C.add + l + C.reset
+      : l.startsWith("-") ? C.del + l + C.reset
+      : l
+  ).join("\n");
 }
 
 function wrapTagged(text, width, indent, open, close) {
@@ -155,11 +246,32 @@ function gitBranch() {
   return _branch;
 }
 
-function updateSystem() {
-  messages[0].content = SYSTEM_PROMPT + (mode === "plan" ? PLAN_NOTE : "");
+function loadProjectMemory() {
+  const p = path.join(process.cwd(), ".lkbclaw");
+  try {
+    if (fs.existsSync(p)) return fs.readFileSync(p, "utf8").trim();
+  } catch {}
+  return "";
 }
 const PLAN_NOTE =
   "\n\n[PLAN MODE] 只分析、规划，不改动任何文件；待用户确认后再执行。";
+const GRILL_NOTE =
+  "\n\n[GRILL MODE · 拷问模式] 你现在是严格的资深架构师，在用户开始编码/实现前，必须把他想做的事情彻底问清楚。" +
+  "规则：\n" +
+  "1. 一次只问一个问题，不要连珠炮；\n" +
+  "2. 每个问题先给出你的【推荐答案】，用户只需确认或修正；\n" +
+  "3. 按依赖关系遍历决策树：有些问题必须等前面的决策确定后才能问，逐个确认；\n" +
+  "4. 能自己读代码库（read_file / list_files / grep_files）回答的，不要浪费用户时间；\n" +
+  "5. 递归追问，直到你们对所有关键决策达成共同理解，再结束拷问；\n" +
+  "6. 本模式只拷问需求与设计，不要写代码、不要改动任何文件。";
+
+function updateSystem() {
+  messages[0].content =
+    SYSTEM_PROMPT +
+    (mode === "plan" ? PLAN_NOTE : "") +
+    (mode === "grill" ? GRILL_NOTE : "") +
+    (projectMemory ? "\n\n【项目记忆 .lkbclaw】\n" + projectMemory : "");
+}
 
 function setMode(m) {
   mode = m;
@@ -192,7 +304,6 @@ function refreshLayout() {
     convBox.position.top = 2;
     convBox.width = convWidth;
     convBox.height = convHeight;
-    convBox.border = { type: "round" };
   }
   if (statusBox) {
     statusBox.position.left = colLeft;
@@ -201,6 +312,8 @@ function refreshLayout() {
   if (inputBox) {
     inputBox.position.left = colLeft;
     inputBox.width = convWidth;
+    inputBox.height = 4;
+    inputBox.border = { type: "round" };
   }
   if (sidebarBox) {
     sidebarBox.position.left = screen.width - sidebarW - 1;
@@ -230,12 +343,20 @@ function toolLines(tool, w) {
   out.push(`  ${C.tool}├─ 🔧 ${tool.name} ${st}${C.reset}`);
   if (showToolDetails) {
     out.push(...wrapTagged("args: " + JSON.stringify(tool.args || {}), w - 4, "  │ ", C.dim, C.reset));
-    if (tool.name === "edit_file" && tool.args) {
-      String(tool.args.old_string || "")
-        .split("\n")
-        .forEach((l) => out.push("  │ " + C.del + "- " + escapeBlessed(l) + C.reset));
+    if (tool.name === "edit_file" && tool.args && tool.args.old_string) {
+      const ops = diffLines(tool.args.old_string, tool.args.new_string);
+      if (ops) {
+        out.push(C.tool + "▍ diff (unified)" + C.reset);
+        for (const l of formatUnified(ops, w)) out.push("  " + l);
+        out.push(C.tool + "▍ diff (side-by-side)" + C.reset);
+        for (const l of formatSideBySide(ops, w)) out.push("  " + l);
+      } else {
+        out.push("  " + C.dim + "(改动过大，无法生成 diff)" + C.reset);
+      }
+    } else if (tool.name === "edit_file" && tool.args) {
       String(tool.args.new_string || "")
         .split("\n")
+        .slice(0, 60)
         .forEach((l) => out.push("  │ " + C.add + "+ " + escapeBlessed(l) + C.reset));
     } else if (tool.name === "write_file" && tool.args) {
       String(tool.args.content || "")
@@ -315,7 +436,8 @@ function renderHeader() {
   const left = `${C.brand}◆ lkbclaw${C.reset} ${C.dim}v${PKG_VERSION}${C.reset}`;
   const right =
     `${escapeBlessed(config.model)} · ${C.dim}${escapeBlessed(process.cwd())}${C.reset} · ⎇ ${escapeBlessed(gitBranch())}` +
-    (mode === "plan" ? ` · ${C.warn}PLAN${C.reset}` : "");
+    (mode === "plan" ? ` · ${C.warn}PLAN${C.reset}` : "") +
+    (mode === "grill" ? ` · ${C.err}GRILL${C.reset}` : "");
   const pad = Math.max(1, innerW - (dispWidth(left) + dispWidth(right)));
   headerBox.setContent(left + " ".repeat(pad) + right);
 }
@@ -333,13 +455,13 @@ function renderStatus() {
   statusBox.setContent(
     `${escapeBlessed(config.model)} │ ${C.brand}${bar}${C.reset} ${sessionTokens} tok │ ⎇ ${escapeBlessed(gitBranch())} │ cache ${cache}% │ ${spin} ${note}`
   );
+  if (sidebarBox && sidebarVisible) renderSidebar();
 }
 
 function renderInput() {
   const prompt = C.brand + "❯ " + C.reset;
   const disp = escapeBlessed(inputBuffer).replace(/\n/g, "\n  ");
-  const hint = C.dim + "  Enter 发送 · Shift+Enter 换行 · ! shell · / 命令 · # 记忆 · Ctrl-C 中断(双按退出)" + C.reset;
-  inputBox.setContent(prompt + disp + "\n" + hint);
+  inputBox.setContent(prompt + disp);
 }
 
 function positionCursor() {
@@ -368,6 +490,10 @@ function setStatusNote(n) {
 }
 
 /* ============ 侧边栏 / 命令面板 / Toast ============ */
+function sbTrunc(s, n) {
+  s = String(s);
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
 function renderSidebar() {
   if (!sidebarBox) return;
   if (!sidebarVisible) {
@@ -376,14 +502,37 @@ function renderSidebar() {
   }
   const lines = [];
   lines.push(C.head + "▍ 侧边栏" + C.reset);
-  lines.push(C.dim + "会话: " + turns.filter((t) => t.role === "user").length + " 轮 · 模式 " + mode + C.reset);
+  lines.push(C.dim + "会话 " + turns.filter((t) => t.role === "user").length + " 轮 · 模式 " + mode + C.reset);
+  lines.push(C.dim + "模型 " + sbTrunc(config.model, 24) + C.reset);
+  lines.push(C.dim + "目录 " + sbTrunc(process.cwd(), 26) + C.reset);
+  lines.push(C.dim + "分支 " + sbTrunc(gitBranch(), 24) + C.reset);
   lines.push("");
-  lines.push(C.tool + "▍ 项目文件" + C.reset);
-  const files = getFileIndex().slice(0, 200);
-  for (const f of files) {
-    lines.push("  " + C.dim + f.replace(process.cwd(), ".") + C.reset);
+  lines.push(C.tool + "▍ 待办 Todo" + C.reset);
+  if (todos.length === 0) lines.push(C.dim + "  (空)" + C.reset);
+  else
+    todos.forEach((t, i) => {
+      const mark = t.done ? C.add + "[x]" + C.reset : "[ ]";
+      lines.push("  " + mark + " " + (i + 1) + ". " + sbTrunc(t.text, 22));
+    });
+  lines.push("");
+  lines.push(C.tool + "▍ 用量 Usage" + C.reset);
+  lines.push(C.dim + "  本次会话 " + sessionTokens + " tok" + C.reset);
+  if (lastUsage) {
+    lines.push(
+      C.dim +
+        "  prompt " + (lastUsage.prompt_tokens || 0) +
+        " · comp " + (lastUsage.completion_tokens || 0) +
+        " · total " + (lastUsage.total_tokens || 0) +
+        C.reset
+    );
+    const cache =
+      lastUsage.prompt_tokens_details && lastUsage.prompt_tokens_details.cached_tokens
+        ? Math.round((lastUsage.prompt_tokens_details.cached_tokens / Math.max(1, lastUsage.prompt_tokens)) * 100)
+        : 0;
+    lines.push(C.dim + "  cache " + cache + "%" + C.reset);
+  } else {
+    lines.push(C.dim + "  (暂无数据)" + C.reset);
   }
-  if (files.length > 200) lines.push(C.dim + "  …(" + files.length + " 个)" + C.reset);
   sidebarBox.setContent(lines.join("\n"));
   sidebarBox.show();
 }
@@ -406,8 +555,10 @@ function safeResolve(p) {
   return path.normalize(full);
 }
 let fileIndexCache = null;
+let fileIndexCacheCwd = null;
 function getFileIndex() {
-  if (fileIndexCache) return fileIndexCache;
+  if (fileIndexCache && fileIndexCacheCwd === process.cwd()) return fileIndexCache;
+  fileIndexCacheCwd = process.cwd();
   const root = process.cwd();
   const out = [];
   const walk = (dir, rel, depth) => {
@@ -532,6 +683,33 @@ async function runShell(cmd) {
   const turn = addTurn("! " + cmd);
   renderConv();
   screen.render();
+
+  // cd 需要真正切换进程工作目录，否则仅作用于子 shell，侧边栏 / @ 补全会停留在旧目录
+  // 仅处理纯 cd（不含 ; && || | > 等 Shell 运算符），否则交给子 shell 自行解释
+  const cdMatch = cmd.match(/^\s*cd\b\s*([^;&|<>]*?)\s*$/);
+  if (cdMatch) {
+    let target = cdMatch[1].trim().replace(/^["']|["']$/g, "");
+    try {
+      if (!target || target === "~" || target === "$HOME") {
+        target = process.env.HOME || process.env.USERPROFILE || process.cwd();
+      }
+      const resolved = path.isAbsolute(target)
+        ? path.normalize(target)
+        : path.resolve(process.cwd(), target);
+      process.chdir(resolved);
+      fileIndexCache = null;
+      fileIndexCacheCwd = process.cwd();
+      renderHeader();
+      renderSidebar();
+      turn.assistant = "已切换到目录: " + process.cwd();
+    } catch (e) {
+      turn.assistant = "[error] cd 失败: " + (e && e.message ? e.message : e);
+    }
+    renderConv();
+    screen.render();
+    return;
+  }
+
   try {
     const res = await executeTool("run_command", { command: cmd });
     turn.assistant = formatShell(res);
@@ -557,6 +735,129 @@ async function downloadFile(url, dest) {
 }
 
 /* ============ 命令 ============ */
+function scanProject() {
+  const root = process.cwd();
+  const name = path.basename(root);
+  const ignore = new Set([
+    ".git", "node_modules", "dist", "build", ".next", ".cache", "coverage",
+    ".venv", "__pycache__", "target", "vendor", ".opencode", "out", ".idea", ".vscode",
+  ]);
+  const stack = [];
+  let pkg = null;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    let s = "Node.js / npm";
+    if (pkg.dependencies) {
+      if (pkg.dependencies.react) s += " (React)";
+      if (pkg.dependencies.vue) s += " (Vue)";
+      if (pkg.dependencies.next) s += " (Next.js)";
+      if (pkg.dependencies.express) s += " (Express)";
+    }
+    stack.push(s);
+  } catch {}
+  for (const f of ["requirements.txt", "pyproject.toml", "setup.py", "go.mod", "Cargo.toml", "pom.xml", "Makefile", "composer.json", "Gemfile", "build.gradle", "pyproject.toml"]) {
+    if (fs.existsSync(path.join(root, f))) stack.push(f);
+  }
+  const tree = [];
+  let count = 0;
+  const walk = (dir, depth) => {
+    if (depth > 3 || count > 220) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => (a.isDirectory() ? 1 : 0) - (b.isDirectory() ? 1 : 0) || a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (ignore.has(e.name)) continue;
+      if (count++ > 220) return;
+      const tag = e.isDirectory() ? "/" : "";
+      tree.push("  ".repeat(depth) + e.name + tag);
+      if (e.isDirectory()) walk(path.join(dir, e.name), depth + 1);
+    }
+  };
+  walk(root, 0);
+  let readme = "";
+  for (const rf of ["README.md", "readme.md", "README.txt", "README"]) {
+    const rp = path.join(root, rf);
+    if (fs.existsSync(rp)) {
+      try { readme = fs.readFileSync(rp, "utf8").split("\n").slice(0, 80).join("\n"); } catch {}
+      break;
+    }
+  }
+  return {
+    name,
+    stack,
+    pkgScripts: (pkg && pkg.scripts) || null,
+    pkgDeps: (pkg && pkg.dependencies) || null,
+    tree: tree.join("\n"),
+    readme,
+  };
+}
+function buildLocalInit(scan) {
+  const lines = [];
+  lines.push(`# ${scan.name}`);
+  lines.push("");
+  lines.push("> 由 `/init` 自动生成的项目说明（lkbclaw 记忆文件）。后续会话会读取它来快速理解本仓库。");
+  lines.push("");
+  lines.push("## 项目简介");
+  lines.push(`- 目录名：${scan.name}`);
+  if (scan.stack.length) lines.push("- 技术栈：" + scan.stack.join("、"));
+  lines.push("");
+  lines.push("## 目录结构");
+  lines.push("```");
+  lines.push(scan.tree || "（空目录）");
+  lines.push("```");
+  lines.push("");
+  if (scan.pkgScripts) {
+    lines.push("## 常用命令");
+    lines.push("");
+    for (const [k, v] of Object.entries(scan.pkgScripts)) lines.push(`- npm run ${k} → \`${v}\``);
+    lines.push("");
+  }
+  if (scan.readme) {
+    lines.push("## README 摘要");
+    lines.push("");
+    lines.push(scan.readme);
+    lines.push("");
+  }
+  lines.push("## 约定");
+  lines.push("- 修改代码优先使用 edit_file 精确替换；新建或大幅重写文件时用 write_file。");
+  lines.push("- 提交前先 `git status` / `git diff` 了解情况；保持清晰的中文 commit message，不要强制推送。");
+  lines.push("- 改完代码后用 `run_tests` 或 `run_command` 跑测试/lint 验证。");
+  return lines.join("\n");
+}
+function stripFences(s) {
+  let t = String(s).trim();
+  const m = t.match(/^```(?:markdown)?\s*([\s\S]*?)\s*```$/i);
+  if (m) return m[1].trim();
+  t = t.replace(/^```(?:markdown)?\s*/i, "").replace(/\s*```$/, "");
+  return t.trim();
+}
+async function generateInitDoc(scan) {
+  const instruction =
+    "你正在为命令行 AI 编程助手 lkbclaw 生成项目记忆文件 .lkbclaw（类似 CLAUDE.md / AGENTS.md）。" +
+    "根据下方仓库扫描信息，写一份简洁、结构化、对未来的 lkbclaw 会话有用的 Markdown 项目说明，帮助它快速理解本仓库并遵守工程约定。" +
+    "必须只输出 Markdown 正文，不要用代码块包裹，不要任何额外解释或结束语。" +
+    "建议结构：\n# 项目名\n## 项目简介\n## 目录结构（用代码块）\n## 常用命令\n## 约定与注意事项\n## 关键文件说明";
+  const messages = [
+    { role: "system", content: instruction },
+    { role: "user", content: "仓库扫描信息（JSON）：\n" + JSON.stringify(scan, null, 2) },
+  ];
+  let doc = "";
+  try {
+    for await (const ch of chat(messages, {
+      model: config.model,
+      temperature: 0.2,
+      stream: true,
+      maxRounds: 1,
+      onUsage: (u) => { lastUsage = u; sessionTokens += u.total_tokens || 0; renderStatus(); },
+    })) doc += ch;
+  } catch {
+    doc = "";
+  }
+  doc = stripFences(doc);
+  if (!doc || doc.trim().length < 20) doc = buildLocalInit(scan);
+  return doc.trim() + "\n";
+}
+
 async function handleCommand(text) {
   const parts = text.slice(1).split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -569,7 +870,7 @@ async function handleCommand(text) {
   };
   if (cmd === "help") {
     info(
-      "命令: /help /tools /clear /compress [保留轮数] /save [标题|路径] /load <id|路径> /list /history /tools-detail /model [name] /provider [name] /mode [plan|build] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /quit" + "\n提示: Tab 可在「折叠 / 展开」工具调用详情之间切换；长输出可用鼠标滚轮滚动。"
+      "命令: /help /tools /clear /compress [保留轮数] /save [标题|路径] /load <id|路径> /list /history /tools-detail /model [name] /provider [name] /mode [plan|build|grill] /todo add|done|rm|list|clear <text> /usage /download <url> [dest] /diff [文件|目录] /compare <文件A> <文件B> /init [--force] /grill-me [想法] /quit" + "\n提示: 需求太模糊时输入会自动进入拷问(grill)模式，把决策逐个问清；发 /mode build 退出。Tab 可折叠/展开工具详情。"
     );
     return;
   }
@@ -654,8 +955,21 @@ async function handleCommand(text) {
     return;
   }
   if (cmd === "mode") {
-    if (arg === "plan" || arg === "build") setMode(arg);
-    else info("用法: /mode plan | build");
+    if (arg === "plan" || arg === "build" || arg === "grill") setMode(arg);
+    else info("用法: /mode plan | build | grill");
+    return;
+  }
+  if (cmd === "grill-me" || cmd === "grill") {
+    setMode("grill");
+    if (arg.trim()) {
+      info(C.err + "已进入拷问(grill)模式，开始就你的想法展开追问…" + C.reset);
+      await sendUserMessage(arg.trim());
+    } else {
+      info(
+        C.err + "已进入拷问(grill)模式。" + C.reset +
+        "\n把你想做但还没想清楚的计划/需求发出来，我会每次只问一个问题并给出推荐答案，直到我们完全对齐。发 /mode build 可退出。"
+      );
+    }
     return;
   }
   if (cmd === "history") {
@@ -755,6 +1069,7 @@ async function handleCommand(text) {
           ? "  (空)"
           : todos.map((t, i) => `  ${t.done ? C.add + "[x]" + C.reset : "[ ]"} ${i + 1}. ${t.text}`).join("\n"))
     );
+    renderSidebar();
     return;
   }
   if (cmd === "download") {
@@ -769,6 +1084,74 @@ async function handleCommand(text) {
       turn.assistant = await downloadFile(url, dest);
       renderConv();
       screen.render();
+    }
+    return;
+  }
+  if (cmd === "diff") {
+    const target = arg.trim();
+    try {
+      const res = await executeTool("git", { operation: "diff", args: target ? "-- " + target : "" });
+      if (res.error) info("获取 diff 失败: " + res.error);
+      else if (!res.stdout || !res.stdout.trim()) info("工作区无未提交改动（" + (target || "全部") + "）");
+      else {
+        const t = addTurn("/diff " + target);
+        t.assistant = colorGitDiff(res.stdout);
+        renderConv();
+        screen.render();
+      }
+    } catch (e) {
+      info("获取 diff 失败: " + (e && e.message ? e.message : e));
+    }
+    return;
+  }
+  if (cmd === "compare") {
+    const parts2 = arg.trim().split(/\s+/);
+    const fa = parts2[0], fb = parts2[1];
+    if (!fa || !fb) { info("用法: /compare <文件A> <文件B>"); return; }
+    try {
+      const A = fs.readFileSync(safeResolve(fa), "utf8");
+      const B = fs.readFileSync(safeResolve(fb), "utf8");
+      const ops = diffLines(A, B);
+      if (!ops) { info("文件过大，无法对比（请对比较小的文件）"); return; }
+      const t = addTurn("/compare " + fa + " " + fb);
+      t.assistant =
+        C.tool + "▍ diff " + escapeBlessed(fa) + " ↔ " + escapeBlessed(fb) + C.reset +
+        "\n" + formatUnified(ops, 200).join("\n");
+      renderConv();
+      screen.render();
+    } catch (e) {
+      info("对比失败: " + (e && e.message ? e.message : e));
+    }
+    return;
+  }
+  if (cmd === "init") {
+    const force = arg.trim() === "--force" || /\s+--force\b/.test(arg);
+    const target = path.join(process.cwd(), ".lkbclaw");
+    if (fs.existsSync(target) && !force) {
+      info("当前目录已存在 .lkbclaw，未覆盖。如需重新生成请使用 /init --force");
+      return;
+    }
+    setStatusNote("正在分析项目并生成 .lkbclaw…");
+    renderConv();
+    screen.render();
+    try {
+      const scan = scanProject();
+      const doc = await generateInitDoc(scan);
+      fs.writeFileSync(target, doc, "utf8");
+      projectMemory = doc;
+      updateSystem();
+      const t = addTurn("/init" + (force ? " --force" : ""));
+      t.assistant =
+        C.add + "已生成 .lkbclaw（" + doc.length + " 字节）✓" + C.reset +
+        "\n" + C.dim + "位于：" + C.reset + escapeBlessed(target) +
+        "\n" + C.dim + "预览（前 12 行）：" + C.reset + "\n" +
+        doc.split("\n").slice(0, 12).join("\n");
+      statusNote = "";
+      renderConv();
+      screen.render();
+    } catch (e) {
+      statusNote = "";
+      info("生成 .lkbclaw 失败: " + (e && e.message ? e.message : e));
     }
     return;
   }
@@ -820,6 +1203,35 @@ async function doSend() {
     return;
   }
 
+  if (mode !== "grill" && looksVague(text)) {
+    setMode("grill");
+    turns.push({
+      role: "assistant",
+      user: "",
+      assistant:
+        C.err + "需求还不够明确，已自动进入拷问(grill)模式：" + C.reset +
+        C.dim + "我会一次只问一个问题并给出推荐答案，把关键决策逐个确认清楚后再动手。发 /mode build 可随时退出。" + C.reset,
+      reasoning: "",
+      tools: [],
+    });
+    renderConv();
+    screen.render();
+  }
+  await sendUserMessage(text);
+}
+
+function looksVague(text) {
+  const t = text.trim();
+  if (t.length < 8) return false;
+  if (t.includes("?") || t.includes("？")) return false;
+  if (!/(做|实现|设计|开发|搭建|写个|搞个|需求|计划|应用|系统|功能|项目|方案|架构|想|打算|准备|重构|加个|弄个)/.test(t)) return false;
+  const concrete =
+    /(```|\.js|\.ts|\.tsx|\.jsx|\.py|\.go|\.rs|\.java|\.c(pp)?|\.rb|\.php|步骤|首先|第一步|用\s*[\w\u4e00-\u9fa5]+|框架|api|数据库|文件|目录|配置|npm|pnpm|yarn|git|docker|k8s|http|端口|\/|[\\.\\w]+\\.(json|md|yml|yaml|toml|env))/i;
+  if (concrete.test(t)) return false;
+  return t.length < 120;
+}
+
+async function sendUserMessage(text) {
   const expanded = expandAtFiles(text);
   const turn = addTurn(text);
   const assistantTurn = { role: "assistant", user: "", assistant: "", reasoning: "", tools: [] };
@@ -968,7 +1380,7 @@ function onKey(ch, key) {
   }
 
   if (shift && k === "tab") {
-    setMode(mode === "plan" ? "build" : "plan");
+    setMode(mode === "plan" || mode === "grill" ? "build" : "plan");
     return;
   }
   if (k === "tab" && !suggestActive) {
@@ -1088,6 +1500,7 @@ function onKey(ch, key) {
 
 export async function main() {
   await ensureConfig();
+  projectMemory = loadProjectMemory();
   updateSystem();
 
   screen = blessed.screen({
@@ -1095,8 +1508,6 @@ export async function main() {
     fullUnicode: true,
     title: "lkbclaw",
   });
-
-  refreshLayout();
 
   headerBox = blessed.box({
     parent: screen,
@@ -1174,6 +1585,8 @@ export async function main() {
     tags: true,
     hidden: true,
   });
+
+  refreshLayout();
 
   screen.on("keypress", onKey);
   screen.on("render", () => {
