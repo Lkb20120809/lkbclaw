@@ -4,9 +4,13 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { resolveSecret } from "./keystore.js";
+import { DATA_DIR } from "./sessions.js";
+
+const LKB_DIR = DATA_DIR;
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const envCandidates = [
+  path.join(LKB_DIR, ".env"),
   path.resolve(process.cwd(), ".env"),
   path.resolve(scriptDir, ".env"),
   path.resolve(scriptDir, "..", ".env"),
@@ -103,7 +107,17 @@ export function resolveEnv(str) {
 
 // 加载 providers.json（多 API 提供商配置）
 let activeProvider = null;
-const providersPath = path.resolve(process.cwd(), "providers.json");
+function getProvidersPath() {
+  const cands = [
+    path.join(LKB_DIR, "providers.json"),
+    path.resolve(process.cwd(), "providers.json"),
+    path.resolve(scriptDir, "providers.json"),
+    path.resolve(scriptDir, "..", "providers.json"),
+    path.resolve(os.homedir(), ".lkbclaw", "providers.json"),
+  ];
+  return cands.find((p) => fs.existsSync(p)) || cands[0];
+}
+const providersPath = getProvidersPath();
 if (fs.existsSync(providersPath)) {
   try {
     const data = JSON.parse(fs.readFileSync(providersPath, "utf8"));
@@ -151,7 +165,7 @@ export const config = {
 
 // 运行时切换 provider（重新读取工作目录的 providers.json 并刷新配置）
 export function setProvider(name) {
-  const p = path.resolve(process.cwd(), "providers.json");
+  const p = getProvidersPath();
   if (!fs.existsSync(p)) throw new Error("未找到 providers.json");
   const data = JSON.parse(fs.readFileSync(p, "utf8"));
   const list = Array.isArray(data) ? data : data.providers || [];

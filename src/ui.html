@@ -4,8 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>lkbclaw · Control UI</title>
-<link rel="icon" href="/assets/logo.ico" type="image/x-icon" />
-<link rel="apple-touch-icon" href="/assets/logo.ico" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ff5a4d'><ellipse cx='6' cy='8' rx='2.2' ry='3'/><ellipse cx='11' cy='5.5' rx='2.2' ry='3'/><ellipse cx='16' cy='5.5' rx='2.2' ry='3'/><ellipse cx='21' cy='8' rx='2.2' ry='3'/><path d='M4 14c0-3 16-3 16 0 0 4-3.5 6.5-8 6.5S4 18 4 14z'/></svg>" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -25,7 +24,7 @@
   --text: #e7eaf0;
   --muted: #8b93a7;
   --muted-2: #5e6577;
-  --brand: #ff5a4d;          /* 龙虾红 · 品牌标识 */
+  --brand: #ff5a4d;          /* claw 红 · 爪子 · 品牌标识 */
   --brand-2: #ff7d72;
   --accent: #36d6c3;         /* 青绿 · 辅助强调 */
   --green: #2dd4a7;          /* 正常运行 */
@@ -129,6 +128,7 @@ body {
   display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 13px;
   box-shadow: 0 4px 14px rgba(255,90,77,0.35);
 }
+.brand .mark svg { width: 16px; height: 16px; display: block; }
 .brand .name { font-weight: 700; font-size: 15.5px; letter-spacing: .3px; white-space: nowrap; }
 .brand .name small { display:block; font-weight:500; font-size:10.5px; color:var(--muted); letter-spacing:1.5px; }
 .app.collapsed .brand .name { display: none; }
@@ -210,24 +210,6 @@ body {
 .msg.bot code.inline { font-family:"JetBrains Mono",monospace; background:rgba(127,127,127,0.16); padding:1px 5px; border-radius:5px; font-size:12.5px; }
 .msg.bot pre { background: var(--code-bg); border:1px solid var(--border); border-radius:10px; padding:12px 14px; overflow:auto; margin:8px 0; box-shadow: inset 0 1px 0 rgba(255,255,255,.03); }
 .msg.bot pre code { font-family:"JetBrains Mono",monospace; font-size:12.5px; background:none; padding:0; }
-.md { line-height:1.65; font-size:13.5px; }
-.md p { margin:.4em 0; }
-.md h1,.md h2,.md h3,.md h4,.md h5,.md h6 { margin:.6em 0 .35em; line-height:1.3; font-weight:600; }
-.md h1 { font-size:1.35em; } .md h2 { font-size:1.2em; } .md h3 { font-size:1.05em; } .md h4,.md h5,.md h6 { font-size:1em; }
-.md ul,.md ol { margin:.4em 0; padding-left:1.4em; }
-.md li { margin:.15em 0; }
-.md ul { list-style:disc; } .md ol { list-style:decimal; }
-.md blockquote { border-left:3px solid var(--border); padding:2px 12px; margin:.5em 0; color:var(--muted); }
-.md code { font-family:"JetBrains Mono",monospace; background:rgba(127,127,127,0.16); padding:1px 5px; border-radius:5px; font-size:12.5px; }
-.md pre { background:var(--code-bg); border:1px solid var(--border); border-radius:10px; padding:12px 14px; overflow:auto; margin:8px 0; }
-.md pre code { font-family:"JetBrains Mono",monospace; font-size:12.5px; background:none; padding:0; }
-.md a { color:var(--accent); text-decoration:underline; }
-.md img { max-width:100%; border-radius:8px; margin:.4em 0; }
-.md hr { border:none; border-top:1px solid var(--border-soft); margin:10px 0; }
-.md table { border-collapse:collapse; width:100%; margin:.5em 0; font-size:13px; }
-.md th,.md td { border:1px solid var(--border-soft); padding:6px 10px; text-align:left; }
-.md th { background:var(--glass-strong); }
-.md del { opacity:.7; }
 .usage { align-self:flex-start; font-size:11px; color:var(--muted-2); font-family:"JetBrains Mono",monospace; padding:2px 4px; }
 
 /* Tool card */
@@ -263,6 +245,7 @@ body {
 
 .empty { margin:auto; color:var(--muted); text-align:center; max-width:420px; padding:40px 20px; }
 .empty .big { font-size:46px; margin-bottom:14px; filter: drop-shadow(0 6px 20px rgba(255,90,77,.35)); }
+.empty .big svg { width:64px; height:64px; }
 .empty h2 { font-size:19px; margin:0 0 8px; font-weight:700; }
 .empty p { font-size:13.5px; line-height:1.6; margin:6px 0; color:var(--muted); }
 .empty .hint { margin-top:16px; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
@@ -402,7 +385,7 @@ body {
   <!-- ============ Sidebar ============ -->
   <aside id="sidebar">
     <div class="brand">
-      <div class="mark">L</div>
+      <div class="mark"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><ellipse cx="6" cy="8" rx="2.2" ry="3"/><ellipse cx="11" cy="5.5" rx="2.2" ry="3"/><ellipse cx="16" cy="5.5" rx="2.2" ry="3"/><ellipse cx="21" cy="8" rx="2.2" ry="3"/><path d="M4 14c0-3 16-3 16 0 0 4-3.5 6.5-8 6.5S4 18 4 14z"/></svg></div>
       <div class="name">lkbclaw<small>CONTROL UI</small></div>
     </div>
     <nav class="nav">
@@ -469,7 +452,7 @@ body {
     <!-- Chat view -->
     <div id="chatScroll">
       <div id="chat"><div class="empty">
-        <div class="big">🦞</div>
+<div class="big"><svg viewBox="0 0 24 24" fill="var(--brand)"><ellipse cx="6" cy="8" rx="2.2" ry="3"/><ellipse cx="11" cy="5.5" rx="2.2" ry="3"/><ellipse cx="16" cy="5.5" rx="2.2" ry="3"/><ellipse cx="21" cy="8" rx="2.2" ry="3"/><path d="M4 14c0-3 16-3 16 0 0 4-3.5 6.5-8 6.5S4 18 4 14z"/></svg></div>
         <h2>欢迎使用 lkbclaw</h2>
         <p>面向开发者与 AI 智能体运维的现代对话工作台。输入消息开始，或使用斜杠命令。</p>
         <div class="hint">
@@ -748,7 +731,7 @@ function renderChat(){
   chatEl.innerHTML = "";
   const s = current();
   if (!s || !s.messages.length){
-    chatEl.innerHTML = '<div class="empty"><div class="big">🦞</div><h2>欢迎使用 lkbclaw</h2><p>面向开发者与 AI 智能体运维的现代对话工作台。输入消息开始，或使用斜杠命令。</p><div class="hint"><span class="chip">/help</span><span class="chip">/clear</span><span class="chip">/model</span><span class="chip">/provider</span><span class="chip">/mode</span><span class="chip">/todo</span></div></div>';
+    chatEl.innerHTML = '<div class="empty"><div class="big"><svg viewBox="0 0 24 24" fill="var(--brand)"><ellipse cx="6" cy="8" rx="2.2" ry="3"/><ellipse cx="11" cy="5.5" rx="2.2" ry="3"/><ellipse cx="16" cy="5.5" rx="2.2" ry="3"/><ellipse cx="21" cy="8" rx="2.2" ry="3"/><path d="M4 14c0-3 16-3 16 0 0 4-3.5 6.5-8 6.5S4 18 4 14z"/></svg></div><h2>欢迎使用 lkbclaw</h2><p>面向开发者与 AI 智能体运维的现代对话工作台。输入消息开始，或使用斜杠命令。</p><div class="hint"><span class="chip">/help</span><span class="chip">/clear</span><span class="chip">/model</span><span class="chip">/provider</span><span class="chip">/mode</span><span class="chip">/todo</span></div></div>';
     updateTitle();
     return;
   }
@@ -813,60 +796,33 @@ function showUsage(u){
   pushUsage(u);
 }
 
-/* ---------- markdown (markdown-it, safe DOM) ---------- */
-function getMd(){
-  if (_md !== null) return _md;
-  if (!window.markdownit) { _md = false; return _md; }
-  const md = window.markdownit({
-    html: false,
-    linkify: true,
-    breaks: true,
-    typographer: false,
-    highlight: (str, lang) => {
+/* ---------- markdown (markdown-it) ---------- */
+const md = window.markdownit({
+  html: false,
+  linkify: true,
+  typographer: true,
+  breaks: true,
+  highlight: function (str, lang) {
+    if (window.hljs) {
       try {
-        if (lang && window.hljs && window.hljs.getLanguage(lang)) {
-          return '<pre class="hljs"><code>' + window.hljs.highlight(str, { language: lang, ignoreIllegals: true }).value + "</code></pre>";
+        if (lang && window.hljs.getLanguage(lang)) {
+          return '<pre class="hljs"><code>' + window.hljs.highlight(str, { language: lang, ignoreIllegals: true }).value + '</code></pre>';
         }
-        if (window.hljs) return '<pre class="hljs"><code>' + window.hljs.highlightAuto(str).value + "</code></pre>";
+        return '<pre class="hljs"><code>' + window.hljs.highlightAuto(str).value + '</code></pre>';
       } catch (e) {}
-      return '<pre class="hljs"><code>' + escapeHtml(str) + "</code></pre>";
-    },
-  });
-  const linkOpen = md.renderer.rules.link_open || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
-  md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-    const href = tokens[idx].attrGet("href") || "";
-    if (!/^(https?:|mailto:)/i.test(href)) tokens[idx].attrSet("href", "#");
-    tokens[idx].attrSet("target", "_blank");
-    tokens[idx].attrSet("rel", "noopener noreferrer");
-    return linkOpen(tokens, idx, options, env, self);
-  };
-  const imgRule = md.renderer.rules.image || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
-  md.renderer.rules.image = (tokens, idx, options, env, self) => {
-    const src = tokens[idx].attrGet("src") || "";
-    if (!/^(https?:|data:image\/)/i.test(src)) tokens[idx].attrSet("src", "");
-    return imgRule(tokens, idx, options, env, self);
-  };
-  _md = md;
-  return _md;
-}
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
-}
-function renderMarkdown(src, container){
-  container.innerHTML = "";
-  const md = getMd();
-  if (!md) {
-    const pre = document.createElement("pre");
-    pre.style.whiteSpace = "pre-wrap";
-    pre.style.fontFamily = "inherit";
-    pre.textContent = src || "";
-    container.appendChild(pre);
-    return;
+    }
+    return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>';
   }
-  const wrap = document.createElement("div");
-  wrap.className = "md";
-  wrap.innerHTML = md.render(src || "");
-  container.appendChild(wrap);
+});
+function renderMarkdown(src, container) {
+  container.innerHTML = md.render(src || "");
+  container.querySelectorAll('code').forEach((c) => { if (!c.closest('pre')) c.classList.add('inline'); });
+  container.querySelectorAll('a').forEach((a) => {
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.style.color = 'var(--accent)';
+    a.style.textDecoration = 'underline';
+  });
 }
 
 /* ---------- dashboard ---------- */
@@ -1139,16 +1095,15 @@ function renderWorkflow(){
   const H=Math.max(420, y);
   svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   if(!parts.length){ svg.innerHTML = '<text x="'+(W/2)+'" y="40" fill="var(--muted)" font-size="13" text-anchor="middle" font-family="Inter,sans-serif">当前会话没有可展示的节点</text>'; return; }
-  let html=`<defs><marker id="wfArrow" markerWidth="12" markerHeight="12" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M1,1 L8,4 L1,7 Z" fill="var(--border)"/></marker></defs>`;
-  const labelW=nodeW-40, labelH=nodeH-12;
+  let html="";
   for(let i=0;i<parts.length;i++){
     const yy=parts[i].y;
     html += `<rect x="${x}" y="${yy}" width="${nodeW}" height="${nodeH}" rx="12" fill="var(--glass-strong)" stroke="${parts[i].color}" stroke-width="1.5"/>`;
     html += `<circle cx="${x+15}" cy="${yy+nodeH/2}" r="5" fill="${parts[i].color}"/>`;
-    html += `<foreignObject x="${x+26}" y="${yy+6}" width="${labelW}" height="${labelH}"><div xmlns="http://www.w3.org/1999/xhtml" style="height:100%;line-height:${labelH}px;font:12px Inter,sans-serif;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${escapeXml(parts[i].label)}</div></foreignObject>`;
+    html += `<text class="wf-node-label" x="${x+30}" y="${yy+nodeH/2+4}" fill="var(--text)">${escapeXml(parts[i].label)}</text>`;
     if(i<parts.length-1){
       const y1=yy+nodeH, y2=parts[i+1].y, mx=(y1+y2)/2;
-      html += `<path d="M${x+nodeW/2} ${y1} C ${x+nodeW/2} ${mx}, ${x+nodeW/2} ${mx}, ${x+nodeW/2} ${y2}" fill="none" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="4 5" marker-end="url(#wfArrow)"/>`;
+      html += `<path d="M${x+nodeW/2} ${y1} C ${x+nodeW/2} ${mx}, ${x+nodeW/2} ${mx}, ${x+nodeW/2} ${y2}" fill="none" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="4 5"/>`;
     }
   }
   svg.innerHTML=html;

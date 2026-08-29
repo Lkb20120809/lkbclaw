@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { main as cliMain } from "./cli.js";
 import { startGateway } from "./gateway.js";
 import { encryptSecret } from "./keystore.js";
+import { DATA_DIR as LKB_DIR } from "./sessions.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -214,8 +215,8 @@ async function detectOllama() {
 }
 
 function haveConfig() {
-  const prov = path.resolve(process.cwd(), "providers.json");
-  if (fs.existsSync(prov)) return true;
+  if (fs.existsSync(path.join(LKB_DIR, "providers.json"))) return true;
+  if (fs.existsSync(path.resolve(process.cwd(), "providers.json"))) return true;
   if (process.env.AGNES_API_KEY) return true;
   return false;
 }
@@ -310,7 +311,7 @@ async function onbread() {
     if (act.value === "url") { baseUrl = (await readLineRaw("新的 BaseURL: ")).trim().replace(/\/$/, ""); }
   }
 
-  const providersPath = path.resolve(process.cwd(), "providers.json");
+  const providersPath = path.join(LKB_DIR, "providers.json");
   let list = [];
   if (fs.existsSync(providersPath)) {
     try {
@@ -325,6 +326,7 @@ async function onbread() {
   const idx = list.findIndex((x) => x.name === p.value.name);
   if (idx >= 0) list[idx] = entry;
   else list.push(entry);
+  fs.mkdirSync(path.dirname(providersPath), { recursive: true });
   fs.writeFileSync(providersPath, JSON.stringify(list, null, 2), "utf8");
 
   console.log("\n✅ 已写入配置: " + providersPath);

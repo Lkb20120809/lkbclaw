@@ -74,9 +74,11 @@ async function readFile({ path: p, limit = 2000 }) {
 async function writeFile({ path: p, content }) {
   try {
     const full = resolveSafe(p);
+    let old = "";
+    try { old = await fsp.readFile(full, "utf8"); } catch {}
     await fsp.mkdir(path.dirname(full), { recursive: true });
     await fsp.writeFile(full, content, "utf8");
-    return { ok: true };
+    return { ok: true, diff: lineDiff(old, content) };
   } catch (e) {
     return { error: String(e.message || e) };
   }
@@ -203,10 +205,31 @@ async function editFile({ path: p, old_string, new_string, replace_all = false }
     }
     const replaced = data.split(old_string).join(new_string);
     await fsp.writeFile(full, replaced, "utf8");
-    return { ok: true, replaced: replace_all ? count : 1 };
+    return { ok: true, replaced: replace_all ? count : 1, diff: lineDiff(data, replaced) };
   } catch (e) {
     return { error: String(e.message || e) };
   }
+}
+
+function lineDiff(oldStr, newStr) {
+  const a = String(oldStr).split("\n");
+  const b = String(newStr).split("\n");
+  if (a.length + b.length > 4000) return null;
+  const n = a.length, m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push(" " + a[i]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push("-" + a[i]); i++; }
+    else { out.push("+" + b[j]); j++; }
+  }
+  while (i < n) { out.push("-" + a[i]); i++; }
+  while (j < m) { out.push("+" + b[j]); j++; }
+  return out.join("\n");
 }
 
 const GIT_ALLOWED = [

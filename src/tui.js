@@ -76,11 +76,9 @@ function writeCells(grid, row, col, ansi, w) {
     } else {
       const text = m[2];
       for (const ch of text) {
-        const wch = ch === "\n" || ch === "\r" ? 1 : wcwidth(ch);
         if (x >= w) break;
         grid[row][x] = { ch: ch === "\n" || ch === "\r" ? " " : ch, s: st };
-        if (wch === 2 && x + 1 < w) grid[row][x + 1] = { ch: " ", s: "" };
-        x += wch || 1;
+        x++;
       }
     }
   }
@@ -150,14 +148,6 @@ export function feed(screen, str) {
       continue;
     }
     if (c0 === "\x1b") {
-      if (p.startsWith("\x1b[200~")) {
-        const end = p.indexOf("\x1b[201~");
-        if (end === -1) break;
-        const chunk = p.slice(6, end);
-        screen._pending = p.slice(end + 6);
-        emit(chunk, { name: "paste" });
-        continue;
-      }
       if (p.startsWith("\x1b[<")) {
         const m = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/.exec(p);
         if (m) {
@@ -429,11 +419,11 @@ function makeScreen() {
     },
   };
 
-    if (process.stdout.isTTY) {
-      process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b[?1002h\x1b[?1006h\x1b[?2004h");
-      process.on("exit", () => {
-        if (process.stdout.isTTY) process.stdout.write("\x1b[?2004l\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l");
-      });
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b[?1002h\x1b[?1006h");
+    process.on("exit", () => {
+      if (process.stdout.isTTY) process.stdout.write("\x1b[?1002l\x1b[?1006l\x1b[?25h\x1b[?1049l");
+    });
     process.stdout.on("resize", () => {
       screen.width = process.stdout.columns || screen.width;
       screen.height = process.stdout.rows || screen.height;

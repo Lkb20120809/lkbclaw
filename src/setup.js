@@ -3,8 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { config } from "./config.js";
+import { DATA_DIR } from "./sessions.js";
 
-const CONFIG_DIR = path.join(os.homedir(), ".lkbclaw");
+const CONFIG_DIR = DATA_DIR;
 const ENV_PATH = path.join(CONFIG_DIR, ".env");
 
 export async function ensureConfig() {
@@ -25,7 +26,7 @@ export async function ensureConfig() {
   }
 
   console.log(
-    "\x1b[1m\x1b[38;5;214mlkbclaw\x1b[0m 首次运行：需要配置 API Key（仅此一次，保存到 ~/.lkbclaw/.env）\n"
+    "\x1b[1m\x1b[38;5;214mlkbclaw\x1b[0m 首次运行：需要配置 API Key（仅此一次，保存到 " + ENV_PATH + "）\n"
   );
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
